@@ -1,0 +1,46 @@
+name: Publish website (GitHub Pages)
+
+# Publishing is opt-in. Enable Settings > Pages > GitHub Actions, then run this
+# workflow from main. It never enables Pages or publishes a feature branch itself.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/configure-pages@v5
+      - name: Prepare the committed standalone build
+        run: python scripts/prepare_pages.py
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .cache/pages-site
+
+  deploy:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish the website
+        id: deployment
+        uses: actions/deploy-pages@v4

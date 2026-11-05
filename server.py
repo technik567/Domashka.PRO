@@ -71,7 +71,7 @@ class DomashkaHandler(BaseHTTPRequestHandler):
 
         try:
             if path == "/api/health":
-                self._send_json(200, {"ok": True, "app": "Домашка.ПРО", "version": "3.3"})
+                self._send_json(200, {"ok": True, "app": "Домашка.ПРО", "version": "3.4"})
                 return
 
             if path == "/api/models":

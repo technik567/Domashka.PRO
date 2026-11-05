@@ -34,6 +34,21 @@ describe('settings UI', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(getParentalStatus().enabled).toBe(true);
   });
+  it('keeps standalone downloads inside the site subdirectory', () => {
+    const originalUrl = window.location.href;
+    try {
+      window.history.replaceState(null, '', '/Domashka.PRO/');
+      render(<App />);
+      const download = screen.getByRole('link', { name: 'Скачать автономный HTML' });
+      expect(download.getAttribute('href')).toBe('./Domashka_PRO.html');
+      expect(new URL(download.href).pathname).toBe('/Domashka.PRO/Domashka_PRO.html');
+      window.history.replaceState(null, '', '/Domashka.PRO/index.html');
+      expect(new URL(download.href).pathname).toBe('/Domashka.PRO/Domashka_PRO.html');
+      expect(download.getAttribute('download')).toBe('Domashka_PRO.html');
+    } finally {
+      window.history.replaceState(null, '', originalUrl);
+    }
+  });
   it('shows only tutor, diary and reference workspaces after reloading a locked app', async () => {
     await setTutorModeEnabled(true, 'parent-password');
     render(<App />);
