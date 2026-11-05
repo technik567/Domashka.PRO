@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-Builds a 100% self-contained single-file standalone application:
+Builds a single-file client with embedded JavaScript, CSS and KaTeX fonts:
   - Domashka_PRO.html
   - static/Domashka_PRO.html
   - Domashka_PRO_Portable.zip
-Works directly from file:// on Windows, macOS, Linux, Android, and iOS without Python/Node/server!
+Desktop: open the generated HTML without Python/Node/server.
+Mobile file viewers may block JavaScript/storage; prefer HTTPS, especially on iOS.
+The root HTML is tracked in Git; static/ and the portable ZIP remain generated artifacts.
 """
 import base64
 import glob
@@ -59,11 +61,15 @@ def build() -> None:
     js_safe = re.sub(r"</(script)", r"<\/\1", js_raw, flags=re.IGNORECASE)
     js_safe = js_safe.replace("<!--", "\\x3c!--")
 
-    ver_match = re.search(
-        r"APP_VERSION\s*=\s*['\"]([^'\"]+)['\"]",
-        open(os.path.join(ROOT, "src", "version.js"), encoding="utf-8").read(),
-    )
-    app_ver = ver_match.group(1) if ver_match else "2.1"
+    with open(os.path.join(ROOT, "src", "version.js"), encoding="utf-8") as f:
+        ver_match = re.search(r"APP_VERSION\s*=\s*['\"]([^'\"]+)['\"]", f.read())
+    if not ver_match:
+        raise RuntimeError("Не удалось прочитать версию приложения из src/version.js")
+    app_ver = ver_match.group(1)
+
+    guide_path = os.path.join(ROOT, "USER_GUIDE.md")
+    if not os.path.isfile(guide_path):
+        raise RuntimeError("Для переносимого комплекта нужен USER_GUIDE.md")
 
     html = f"""<!doctype html>
 <html lang="ru">
@@ -95,8 +101,16 @@ def build() -> None:
     readme_txt = f"""ДОМАШКА.ПРО {app_ver} — ПЕРЕНОСИМОЕ ПРИЛОЖЕНИЕ
 
 ЗАПУСК
-Откройте Domashka_PRO.html в современном браузере. Python и Node.js не нужны.
-На мобильном устройстве используйте именно браузер, а не ограниченный просмотрщик файлов.
+Распакуйте архив, затем откройте Domashka_PRO.html в современном браузере на ПК.
+Python и Node.js для этого не нужны. Исходный index.html открывать не нужно.
+Android: локальный файл работает не во всех браузерах/файловых менеджерах; предпочтительнее HTTPS.
+iPhone/iPad: рекомендуется HTTPS-сайт в Safari. «Файлы» / Quick Look может не запускать HTML.
+Добавление ярлыка сайта на домашний экран не гарантирует офлайн-работу.
+
+ПОЛНОЕ РУКОВОДСТВО
+Откройте ПОЛНАЯ_ИНСТРУКЦИЯ.txt: ПК, Android, iOS, публикация по HTTPS, нейросети,
+фото/документы, детский режим, история, обновление и решение частых проблем.
+Это копия USER_GUIDE.md из исходников, включённая в комплект при сборке.
 
 ВЫБОР НЕЙРОСЕТИ
 Кнопка настроек ИИ в шапке: выберите провайдера и модель.
@@ -117,8 +131,10 @@ Ollama / свой API требует отдельно запущенной мо�
 Локальные калькуляторы, справочник, дневник и история работают без сервера.
 Облачный ИИ и часть OCR/PDF требуют интернета; текст и фото передаются внешним сервисам.
 Не загружайте личные данные. Для резервной копии истории используйте экспорт JSON вне детского режима.
-Настройки сайта не переносятся автоматически в скачанный HTML. При приватном просмотре или
-очистке данных браузера история может быть потеряна.
+Настройки сайта не переносятся автоматически в скачанный HTML. JSON экспортирует чаты,
+но не дневник, настройки ИИ, ключи или родительский пароль. Между ПК и телефоном нет
+автосинхронизации. При приватном просмотре или очистке данных история может быть потеряна.
+Перед обновлением сохраните копию чатов и отдельно важные записи дневника.
 """
 
     win_bat = '@echo off\r\nchcp 65001 >nul\r\nstart "" "%~dp0Domashka_PRO.html"\r\n'
@@ -128,6 +144,7 @@ Ollama / свой API требует отдельно запущенной мо�
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.write(out_main, arcname="Domashka_PRO/Domashka_PRO.html")
         zf.writestr("Domashka_PRO/КАК_ЗАПУСТИТЬ.txt", readme_txt)
+        zf.write(guide_path, arcname="Domashka_PRO/ПОЛНАЯ_ИНСТРУКЦИЯ.txt")
         zf.writestr("Domashka_PRO/Запустить_Windows.bat", win_bat)
         info = zipfile.ZipInfo("Domashka_PRO/Запустить_Mac_Linux.command")
         info.external_attr = 0o755 << 16

@@ -318,7 +318,8 @@ export default function App() {
             {/* Download Standalone HTML when on HTTP Server */}
             {isHttpServer && !isSandboxedViewer && !tutorOnly && (
               <a
-                href="/Domashka_PRO.html"
+                href="./Domashka_PRO.html"
+                aria-label="Скачать автономный HTML"
                 download="Domashka_PRO.html"
                 className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold hidden sm:inline-flex items-center gap-1.5 shadow-sm transition"
                 title="Скачать автономный однофайловый вариант приложения"

@@ -6,7 +6,6 @@ __pycache__/
 .env.*
 !.env.example
 /static/
-/Domashka_PRO.html
 /Domashka_PRO_Portable.zip
 /data/
 /uploads/
