@@ -1,0 +1,490 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Smooth entrance & AI waiting animations */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes orbPulse {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.45), 0 12px 32px rgba(79, 70, 229, 0.35);
+  }
+  50% {
+    transform: scale(1.07);
+    box-shadow: 0 0 0 16px rgba(59, 130, 246, 0), 0 16px 40px rgba(124, 58, 237, 0.48);
+  }
+}
+
+@keyframes floatSlow {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-6px) rotate(5deg);
+  }
+}
+
+@keyframes shimmerSweep {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-fade-up {
+  animation: fadeInUp 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-orb {
+  animation: orbPulse 2.4s ease-in-out infinite;
+}
+
+.animate-float-1 {
+  animation: floatSlow 3.1s ease-in-out infinite;
+}
+
+.animate-float-2 {
+  animation: floatSlow 3.7s ease-in-out 0.6s infinite;
+}
+
+.animate-float-3 {
+  animation: floatSlow 3.4s ease-in-out 1.2s infinite;
+}
+
+.shimmer-line {
+  background: linear-gradient(
+    90deg,
+    rgba(148, 163, 184, 0.14) 20%,
+    rgba(99, 102, 241, 0.26) 50%,
+    rgba(148, 163, 184, 0.14) 80%
+  );
+  background-size: 200% 100%;
+  animation: shimmerSweep 1.8s linear infinite;
+}
+
+/* ==========================================================================
+   TRUE BASELINE-LOCKED RUSSIAN SCHOOL NOTEBOOK SHEETS (v3.2)
+   1 text line = --nb-step (32px desktop / 28px mobile) = 2 grid cells (--nb-cell = 16px / 14px).
+   --nb-bg-y is auto-calibrated to the exact alphabetic baseline of the active OS font!
+   ========================================================================== */
+.notebook-grid,
+.notebook-lined {
+  --nb-cell: 16px;
+  --nb-step: 32px;
+  --nb-margin-right: 48px;
+  padding-top: var(--nb-step) !important;
+  padding-bottom: var(--nb-step) !important;
+  padding-left: calc(var(--nb-cell) * 2) !important;
+  padding-right: calc(var(--nb-margin-right) + 12px) !important;
+}
+
+/* Authentic Russian school squared notebook sheet ("Тетрадь в клетку") */
+.notebook-grid {
+  --nb-bg-y: 7px;
+  background-color: #fdfcf7;
+  background-image:
+    linear-gradient(to right, rgba(239, 68, 68, 0.42) 2px, transparent 2px),
+    linear-gradient(to right, rgba(59, 130, 246, 0.20) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(59, 130, 246, 0.20) 1px, transparent 1px);
+  background-size: 100% 100%, var(--nb-cell) var(--nb-cell), var(--nb-cell) var(--nb-cell);
+  background-position: calc(100% - var(--nb-margin-right)) 0, 0 var(--nb-bg-y), 0 var(--nb-bg-y);
+  background-repeat: no-repeat, repeat, repeat;
+}
+
+.dark .notebook-grid {
+  background-color: #0f172a;
+  background-image:
+    linear-gradient(to right, rgba(248, 113, 113, 0.34) 2px, transparent 2px),
+    linear-gradient(to right, rgba(96, 165, 250, 0.13) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(96, 165, 250, 0.13) 1px, transparent 1px);
+  background-size: 100% 100%, var(--nb-cell) var(--nb-cell), var(--nb-cell) var(--nb-cell);
+  background-position: calc(100% - var(--nb-margin-right)) 0, 0 var(--nb-bg-y), 0 var(--nb-bg-y);
+  background-repeat: no-repeat, repeat, repeat;
+}
+
+/* Authentic Russian school lined notebook sheet ("Тетрадь в линейку") */
+.notebook-lined {
+  --nb-bg-y: 23px;
+  background-color: #fdfcf7;
+  background-image:
+    linear-gradient(to right, rgba(239, 68, 68, 0.42) 2px, transparent 2px),
+    linear-gradient(
+      to bottom,
+      transparent calc(var(--nb-step) - 1px),
+      rgba(59, 130, 246, 0.27) calc(var(--nb-step) - 1px),
+      rgba(59, 130, 246, 0.27) var(--nb-step)
+    );
+  background-size: 100% 100%, 100% var(--nb-step);
+  background-position: calc(100% - var(--nb-margin-right)) 0, 0 var(--nb-bg-y);
+  background-repeat: no-repeat, repeat;
+}
+
+.dark .notebook-lined {
+  background-color: #0f172a;
+  background-image:
+    linear-gradient(to right, rgba(248, 113, 113, 0.34) 2px, transparent 2px),
+    linear-gradient(
+      to bottom,
+      transparent calc(var(--nb-step) - 1px),
+      rgba(96, 165, 250, 0.17) calc(var(--nb-step) - 1px),
+      rgba(96, 165, 250, 0.17) var(--nb-step)
+    );
+  background-size: 100% 100%, 100% var(--nb-step);
+  background-position: calc(100% - var(--nb-margin-right)) 0, 0 var(--nb-bg-y);
+  background-repeat: no-repeat, repeat;
+}
+
+/* Default Markdown & KaTeX typography (for clean modern cards, cheat sheets, etc.) */
+.md-content {
+  line-height: 1.72;
+  color: #0f172a;
+  font-size: 0.98rem;
+}
+
+.dark .md-content {
+  color: #e2e8f0;
+}
+
+.md-content h1,
+.md-content h2,
+.md-content h3,
+.md-content h4 {
+  font-weight: 700;
+  color: #0f172a;
+  margin-top: 1.15rem;
+  margin-bottom: 0.55rem;
+  line-height: 1.35;
+}
+
+.dark .md-content h1,
+.dark .md-content h2,
+.dark .md-content h3,
+.dark .md-content h4 {
+  color: #f8fafc;
+}
+
+.md-content h2 {
+  font-size: 1.18rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px dashed rgba(148, 163, 184, 0.45);
+}
+
+.md-content h3 {
+  font-size: 1.06rem;
+}
+
+.md-content p {
+  margin-bottom: 0.75rem;
+}
+
+.md-content ul,
+.md-content ol {
+  margin-bottom: 0.85rem;
+  padding-left: 1.4rem;
+}
+
+.md-content ul {
+  list-style-type: disc;
+}
+
+.md-content ol {
+  list-style-type: decimal;
+}
+
+.md-content li {
+  margin-bottom: 0.3rem;
+}
+
+.md-content strong {
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.dark .md-content strong {
+  color: #ffffff;
+}
+
+.md-content blockquote {
+  border-left: 4px solid #3b82f6;
+  background: rgba(239, 246, 255, 0.78);
+  padding: 0.65rem 1rem;
+  border-radius: 0 0.5rem 0.5rem 0;
+  margin: 0.85rem 0;
+}
+
+.dark .md-content blockquote {
+  background: rgba(30, 58, 138, 0.32);
+  border-left-color: #60a5fa;
+}
+
+.md-content pre {
+  background: #0f172a;
+  color: #f8fafc;
+  padding: 0.85rem 1rem;
+  border-radius: 0.65rem;
+  overflow-x: auto;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  margin: 0.8rem 0;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.md-content :not(pre) > code {
+  background: rgba(226, 232, 240, 0.8);
+  color: #1e293b;
+  padding: 0.12rem 0.38rem;
+  border-radius: 0.35rem;
+  font-size: 0.88em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.dark .md-content :not(pre) > code {
+  background: rgba(51, 65, 85, 0.9);
+  color: #e2e8f0;
+}
+
+.md-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.9rem 0;
+  font-size: 0.9rem;
+  background: rgba(255, 255, 255, 0.94);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.dark .md-content table {
+  background: rgba(30, 41, 59, 0.88);
+}
+
+.md-content th,
+.md-content td {
+  border: 1px solid #cbd5e1;
+  padding: 0.55rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.dark .md-content th,
+.dark .md-content td {
+  border-color: #334155;
+}
+
+.md-content th {
+  background: #f1f5f9;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.dark .md-content th {
+  background: #1e293b;
+  color: #f1f5f9;
+}
+
+/* ==========================================================================
+   STRICT VERTICAL RHYTHM OVERRIDES INSIDE NOTEBOOK SHEETS
+   Every line of text, list item, and heading sits directly on the cell/ruled line!
+   ========================================================================== */
+.notebook-grid .md-content,
+.notebook-lined .md-content {
+  display: flow-root;
+  font-size: 16px;
+  line-height: var(--nb-step) !important;
+}
+
+.notebook-grid .md-content > *,
+.notebook-lined .md-content > * {
+  margin-top: 0 !important;
+}
+
+.notebook-grid .md-content p,
+.notebook-lined .md-content p {
+  margin-top: 0 !important;
+  margin-bottom: var(--nb-step);
+  line-height: var(--nb-step) !important;
+}
+
+.notebook-grid .md-content ul,
+.notebook-grid .md-content ol,
+.notebook-lined .md-content ul,
+.notebook-lined .md-content ol {
+  margin-top: 0 !important;
+  margin-bottom: var(--nb-step);
+  padding-left: calc(var(--nb-cell) * 2);
+}
+
+.notebook-grid .md-content li,
+.notebook-lined .md-content li {
+  margin-top: 0 !important;
+  margin-bottom: 0;
+  line-height: var(--nb-step) !important;
+}
+
+.notebook-grid .md-content li > p,
+.notebook-lined .md-content li > p {
+  margin-bottom: 0 !important;
+}
+
+.notebook-grid .md-content h1,
+.notebook-grid .md-content h2,
+.notebook-grid .md-content h3,
+.notebook-grid .md-content h4,
+.notebook-lined .md-content h1,
+.notebook-lined .md-content h2,
+.notebook-lined .md-content h3,
+.notebook-lined .md-content h4 {
+  margin-top: 0 !important;
+  margin-bottom: 0;
+  padding: 0 !important;
+  border-bottom: none !important;
+  line-height: var(--nb-step) !important;
+}
+
+.notebook-grid .md-content h1,
+.notebook-grid .md-content h2,
+.notebook-lined .md-content h1,
+.notebook-lined .md-content h2 {
+  font-size: 1.08rem;
+  color: #1e3a8a;
+}
+
+.dark .notebook-grid .md-content h1,
+.dark .notebook-grid .md-content h2,
+.dark .notebook-lined .md-content h1,
+.dark .notebook-lined .md-content h2 {
+  color: #93c5fd;
+}
+
+.notebook-grid .md-content h3,
+.notebook-lined .md-content h3 {
+  font-size: 1.02rem;
+}
+
+.notebook-grid .md-content hr,
+.notebook-lined .md-content hr {
+  height: var(--nb-step) !important;
+  margin: 0 !important;
+  border: none !important;
+}
+
+/* Prevent inline KaTeX superscripts/subscripts/radicals from inflating the 32px line box */
+.notebook-grid .md-content .katex,
+.notebook-lined .md-content .katex {
+  line-height: 0 !important;
+  font-size: 1.02em;
+}
+
+.notebook-grid .md-content :not(.katex-display) > .katex,
+.notebook-lined .md-content :not(.katex-display) > .katex {
+  display: inline-block;
+  margin-top: -10px;
+  margin-bottom: -10px;
+}
+
+.notebook-grid .md-content .katex-display,
+.notebook-lined .md-content .katex-display {
+  margin-top: 0 !important;
+  margin-bottom: var(--nb-step);
+}
+
+.notebook-grid .md-content blockquote,
+.notebook-lined .md-content blockquote {
+  margin-top: 0 !important;
+  margin-bottom: var(--nb-step);
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  line-height: var(--nb-step) !important;
+}
+
+.notebook-grid .md-content table,
+.notebook-lined .md-content table,
+.notebook-grid .md-content pre,
+.notebook-lined .md-content pre {
+  margin-top: 0 !important;
+  margin-bottom: var(--nb-step);
+}
+
+.notebook-grid .md-content th,
+.notebook-grid .md-content td,
+.notebook-lined .md-content th,
+.notebook-lined .md-content td {
+  line-height: var(--nb-step) !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+/* Hide scrollbar cleanly on mobile pill strips */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+@media (max-width: 639px) {
+  .notebook-grid,
+  .notebook-lined {
+    --nb-cell: 14px;
+    --nb-step: 28px;
+    --nb-margin-right: 16px;
+    padding-left: var(--nb-cell) !important;
+    padding-right: calc(var(--nb-margin-right) + 8px) !important;
+  }
+  .notebook-grid .md-content,
+  .notebook-lined .md-content {
+    font-size: 14.5px;
+  }
+  .md-content {
+    font-size: 0.92rem;
+    line-height: 1.65;
+  }
+  .md-content table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+  padding: 0.25rem 0;
+  margin: 0.5rem 0 !important;
+}
+
+.notebook-grid .katex-display,
+.notebook-lined .katex-display {
+  margin: 0 0 var(--nb-step) 0 !important;
+  padding: 4px 0;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  .notebook-grid,
+  .notebook-lined {
+    background: #ffffff !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+}

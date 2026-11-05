@@ -1,0 +1,47 @@
+import React from 'react';
+import { describe, expect, it, vi } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import AiSettingsModal from '../src/components/AiSettingsModal';
+import ParentModeModal from '../src/components/ParentModeModal';
+import App from '../src/App';
+import { api, DEFAULT_AI_SETTINGS } from '../src/api';
+import { getParentalStatus, setTutorModeEnabled } from '../src/standalone/parentalControl';
+
+describe('settings UI', () => {
+  it('saves a specific free gateway and keeps a missing saved OpenRouter model visible', async () => {
+    const onSave = vi.fn(); const user = userEvent.setup();
+    const { rerender } = render(<AiSettingsModal isOpen settings={DEFAULT_AI_SETTINGS} onSave={onSave} onClose={() => {}} />);
+    await user.selectOptions(screen.getByLabelText('2. Бесплатная облачная модель'), 'pollinations');
+    await user.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
+    expect(onSave.mock.calls[0][0]).toMatchObject({ provider: 'builtin', builtinModel: 'pollinations' });
+    vi.spyOn(api, 'getModels').mockResolvedValue({ ok: true, openrouter_free: [{ id: 'openrouter/free', name: 'Auto' }] });
+    rerender(<AiSettingsModal isOpen settings={{ ...DEFAULT_AI_SETTINGS, provider: 'openrouter', openrouterKey: 'test', openrouterModel: 'saved/model:free' }} onSave={onSave} onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByLabelText('2. Бесплатная модель OpenRouter').value).toBe('saved/model:free'));
+    expect(screen.getByRole('option', { name: /saved\/model:free/ })).toBeTruthy();
+  });
+  it('requires matching password confirmation before enabling parental mode', async () => {
+    const user = userEvent.setup(); const onClose = vi.fn();
+    render(<ParentModeModal isOpen status={getParentalStatus()} onClose={onClose} />);
+    await user.type(screen.getByLabelText('Придумайте родительский пароль'), 'parent-password');
+    await user.type(screen.getByLabelText(/^Повторите пароль/), 'not-matching');
+    await user.click(screen.getByRole('button', { name: 'Включить детский режим' }));
+    expect(screen.getByRole('alert').textContent).toBe('Пароли не совпадают.');
+    expect(getParentalStatus().enabled).toBe(false);
+    await user.clear(screen.getByLabelText(/^Повторите пароль/));
+    await user.type(screen.getByLabelText(/^Повторите пароль/), 'parent-password');
+    await user.click(screen.getByRole('button', { name: 'Включить детский режим' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(getParentalStatus().enabled).toBe(true);
+  });
+  it('shows only tutor, diary and reference workspaces after reloading a locked app', async () => {
+    await setTutorModeEnabled(true, 'parent-password');
+    render(<App />);
+    expect(screen.getByText('Детский режим: только репетитор.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Начать с подсказки' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Калькуляторы', exact: true })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Проверить', exact: true })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Скачать копию', exact: true })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Как в тетрадь/ })).toBeNull();
+  });
+});
