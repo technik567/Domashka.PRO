@@ -1,9 +1,11 @@
+import { ensureWorkspaceActive, getManagedChild, getInheritedAiSettings } from './standalone/accounts';
 import { isTutorModeEnabled } from './standalone/parentalControl';
 import { tutorFollowupQuestion } from './standalone/tutorPolicy';
 import { throwIfAborted } from './standalone/network';
 
 const TUTOR_ONLY_ERROR = { ok: false, error: 'В детском режиме доступен только репетитор. Этот инструмент открывается родителем.' };
 function checkRequestActive(signal, lockAtStart) {
+  ensureWorkspaceActive();
   throwIfAborted(signal);
   if (isTutorModeEnabled() !== lockAtStart) throw new DOMException('Режим обучения изменён.', 'AbortError');
 }
@@ -74,6 +76,8 @@ export function saveTheme(theme) {
 
 export function loadAiSettings() {
   try {
+    const inherited = getInheritedAiSettings();
+    if (inherited) return { ...DEFAULT_AI_SETTINGS, ...inherited };
     const raw = safeStorage.getItem(SETTINGS_KEY);
     if (!raw) return { ...DEFAULT_AI_SETTINGS };
     return { ...DEFAULT_AI_SETTINGS, ...JSON.parse(raw) };
@@ -83,6 +87,8 @@ export function loadAiSettings() {
 }
 
 export function saveAiSettings(settings) {
+  ensureWorkspaceActive();
+  if (getManagedChild()) throw new Error('Настройки ИИ для ученика выбирает родитель в разделе «Семья».');
   if (isTutorModeEnabled()) throw new Error('Настройки ИИ меняет родитель после отключения детского режима паролем.');
   const merged = { ...DEFAULT_AI_SETTINGS, ...settings };
   safeStorage.setItem(SETTINGS_KEY, JSON.stringify(merged));
@@ -90,6 +96,8 @@ export function saveAiSettings(settings) {
 }
 
 export function loadStudentProfile() {
+  const child = getManagedChild();
+  if (child) return { ...DEFAULT_PROFILE, grade: child.grade, examGoal: child.grade === 9 ? 'oge' : child.grade >= 10 ? 'ege' : 'fgos' };
   try {
     const raw = safeStorage.getItem(PROFILE_KEY);
     if (!raw) return { ...DEFAULT_PROFILE };
@@ -100,6 +108,8 @@ export function loadStudentProfile() {
 }
 
 export function saveStudentProfile(profile) {
+  ensureWorkspaceActive();
+  if (getManagedChild()) return loadStudentProfile();
   const merged = { ...DEFAULT_PROFILE, ...profile };
   safeStorage.setItem(PROFILE_KEY, JSON.stringify(merged));
   return merged;
@@ -211,7 +221,7 @@ export const api = {
       return { ok: false, error: 'Напишите задание, надиктуйте голосом или добавьте фотографию.' };
     }
 
-    onStatus?.({ stage: 'prepare', message: 'Проверяем формулы и готовим запрос по программе ФГОС...' });
+    onStatus?.({ stage: 'prepare', message: 'Подготавливаем условие и выбранный учебный режим…' });
 
     try {
       checkRequestActive(signal, locked);
@@ -253,6 +263,7 @@ export const api = {
         { role: 'assistant', content: ansMd },
       ];
 
+      onStatus?.({ stage: 'saving', message: 'Ответ получен. Сохраняем в вашу тетрадь…' });
       const saved = await chatStore.saveNew({
         item_type: 'solve',
         tutor_only: locked,
@@ -354,6 +365,7 @@ export const api = {
       checkRequestActive(signal, locked);
       nextMsgs.push({ role: 'assistant', content: reply });
       if (historyId) {
+        onStatus?.({ stage: 'saving', message: 'Сохраняем продолжение диалога…' });
         await chatStore.update(historyId, {
           messages: nextMsgs,
           response_md: nextMsgs[1]?.content || reply,
@@ -462,6 +474,7 @@ export const api = {
         { role: 'assistant', content: ansMd },
       ];
 
+      onStatus?.({ stage: 'saving', message: 'Ответ получен. Сохраняем в вашу тетрадь…' });
       const saved = await chatStore.saveNew({
         item_type: 'check',
         grade,

@@ -6,6 +6,7 @@ Object.defineProperty(globalThis, 'crypto', { configurable: true, value: webcryp
 Element.prototype.scrollIntoView = () => {};
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
   window.__STANDALONE_BUILD__ = true;
   vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('Network disabled in tests'))));
 });

@@ -1,12 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Sparkles, CheckCircle2, Camera, Clock, Zap, Lightbulb, X } from 'lucide-react';
+
+import { buildProgressSteps } from '../standalone/progressModel';
 
 const SCHOOL_FACTS = [
   'В задачах по физике всегда переводите км/ч в м/с делением на 3,6 (например: 72 км/ч = 20 м/с).',
   'В кратких страдательных причастиях («задача решена», «работа сдана») всегда пишется только одна буква Н!',
   'По теореме Виета для приведённого уравнения x² + px + q = 0 сумма корней равна −p, а произведение равно q.',
-  'В сочинении ОГЭ (задание 13) объём должен быть не менее 70 слов, а в сочинении ЕГЭ — не менее 150 слов.',
-  'Приставки З- в русском языке не бывает! Перед глухими согласными пишется С- (сделать, сдать, сфотографировать).',
+  'Площадь прямоугольника равна произведению длины и ширины. Перед вычислением выразите обе стороны в одинаковых единицах.',
+  'Приставка с- неизменяемая: сделать, сдать. В приставках на -з/-с буква зависит от следующего согласного: разбить — расписать.',
   'Катет прямоугольного треугольника, лежащий против угла в 30°, равен половине гипотенузы.',
 ];
 
@@ -36,25 +38,11 @@ export default function AiThinkingCard({
   }, []);
 
   const sec = (elapsedMs / 1000).toFixed(1);
-  const activeStep =
-    status?.stage === 'vision'
-      ? 0
-      : elapsedMs < 2400
-      ? hasPhoto
-        ? 0
-        : 1
-      : elapsedMs < 6500
-      ? 2
-      : 3;
-
-  const steps = [
-    ...(hasPhoto
-      ? [{ label: 'Сканируем фото: распознаём почерк, текст и формулы', icon: Camera }]
-      : []),
-    { label: 'Анализируем условие и школьную программу вашего класса' },
-    { label: 'Проверяем формулы, правила ФГОС и строим пошаговую логику' },
-    { label: 'Оформляем аккуратный чистовик с пояснениями' },
-  ];
+  const phaseStart = useRef({ stage: status?.stage, at: Date.now() });
+  if (phaseStart.current.stage !== status?.stage) phaseStart.current = { stage: status?.stage, at: Date.now() };
+  const photoPlan = useRef(status?.photoInputUsed);
+  if (status?.photoInputUsed) photoPlan.current = status.photoInputUsed;
+  const steps = buildProgressSteps({ ...status, photoInputUsed: photoPlan.current }, hasPhoto, Date.now() - phaseStart.current.at);
 
   const isQueue = status?.stage === 'queue' && status?.waitTotal > 0;
   const queuePct = isQueue
@@ -90,7 +78,7 @@ export default function AiThinkingCard({
               )}
             </div>
             <p className="text-xs sm:text-sm text-indigo-700 dark:text-indigo-300 font-medium mt-0.5">
-              {status?.message || 'Готовим развёрнутый ответ без ошибок...'}
+              {status?.message || 'Подготавливаем запрос…'}
             </p>
           </div>
         </div>
@@ -118,7 +106,7 @@ export default function AiThinkingCard({
       {isQueue && (
         <div className="mb-5 p-3.5 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/70">
           <div className="flex items-center justify-between gap-2 text-xs font-semibold text-amber-900 dark:text-amber-200 mb-2">
-            <span>⏳ Очередь бесплатного канала: ответ через {status.waitRemaining} сек...</span>
+            <span>⏳ Пауза бесплатного канала: следующая попытка через {status.waitRemaining} сек</span>
             <span>{queuePct}%</span>
           </div>
           <div className="w-full h-2.5 bg-amber-200/70 dark:bg-amber-900/60 rounded-full overflow-hidden">
@@ -130,7 +118,7 @@ export default function AiThinkingCard({
           {onOpenSettings && (
             <div className="mt-2.5 flex items-center justify-between gap-2 flex-wrap">
               <span className="text-[11px] text-amber-800 dark:text-amber-300">
-                Хотите ответы за 2 секунды вообще без ожидания 45 сек?
+                Другой провайдер может быть доступнее. Скорость ответа не гарантируется.
               </span>
               <button
                 type="button"
@@ -138,7 +126,7 @@ export default function AiThinkingCard({
                 className="inline-flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white transition"
               >
                 <Zap className="w-3 h-3" />
-                Подключить бесплатный Турбо-ключ
+                Настройки ИИ
               </button>
             </div>
           )}
@@ -148,11 +136,13 @@ export default function AiThinkingCard({
       {/* Animated Step Checklist */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-5">
         {steps.map((st, idx) => {
-          const isDone = idx < activeStep;
-          const isCurrent = idx === activeStep || (idx === steps.length - 1 && activeStep >= steps.length);
+          const isDone = st.done;
+          const isCurrent = st.active;
           return (
             <div
-              key={idx}
+              key={st.id}
+              data-testid={`progress-${st.id}`}
+              data-state={isDone ? 'done' : isCurrent ? 'active' : 'pending'}
               className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl border text-xs font-medium transition-all ${
                 isDone
                   ? 'bg-emerald-50/80 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/60 text-emerald-800 dark:text-emerald-300'
@@ -168,11 +158,26 @@ export default function AiThinkingCard({
               ) : (
                 <span className="w-4 h-4 rounded-full border border-slate-300 dark:border-slate-600 shrink-0" />
               )}
-              <span className="leading-snug">{st.label}</span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="leading-snug">{st.label}</span>
+                  <span className="font-mono shrink-0">{st.estimated ? '≈' : ''}{st.percent}%</span>
+                </div>
+                <div role="progressbar" aria-label={st.label} aria-valuemin={0} aria-valuemax={100}
+                  aria-valuenow={st.percent} aria-valuetext={`${st.estimated ? 'Оценочно ' : ''}${st.percent}%`}
+                  className="h-1.5 mt-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                  <div className={isDone ? 'h-full bg-emerald-500' : 'h-full bg-indigo-500 transition-all duration-500'} style={{ width: `${st.percent}%` }} />
+                </div>
+              </div>
             </div>
           );
         })}
       </div>
+
+      <p className="text-[11px] text-slate-500 dark:text-slate-400 mb-4">
+        ≈ — оценка ожидания, не внутренний прогресс модели. 100% и галочка появляются только после завершения этапа.
+        При Vision нейросеть анализирует само фото во время получения ответа, а не в отдельном OCR.
+      </p>
 
       {/* Shimmer Notebook Preview Skeleton */}
       <div className="space-y-2.5 mb-5 px-1">

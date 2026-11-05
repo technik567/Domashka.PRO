@@ -1,15 +1,16 @@
 {
   "name": "domashka-pro",
-  "version": "3.5.0",
+  "version": "4.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:standalone": "vite build && python3 build_standalone.py",
+    "build:standalone": "node scripts/reference_coverage.mjs && vite build && python3 build_standalone.py",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:python": "python3 -m unittest discover -s tests -p \"test_*.py\""
+    "test:python": "python3 -m unittest discover -s tests -p \"test_*.py\"",
+    "check:reference": "node scripts/reference_coverage.mjs --check"
   },
   "dependencies": {
     "dompurify": "^3.4.17",

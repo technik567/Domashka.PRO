@@ -1,11 +1,13 @@
 // Unified Persistent Storage Engine (IndexedDB for large chat histories + photos, localStorage for fast prefs & drafts, memory fallback)
 import { APP_VERSION } from '../version';
+import { workspaceKey, workspaceDbName, ensureWorkspaceActive } from './accounts';
 
 const memoryMap = new Map();
 const volatileKeys = new Set();
 
 export const safeStorage = {
   getItem(key) {
+    key = workspaceKey(key);
     if (volatileKeys.has(key)) return memoryMap.get(key) ?? null;
     try {
       return window.localStorage.getItem(key);
@@ -14,6 +16,7 @@ export const safeStorage = {
     }
   },
   setItem(key, value) {
+    key = workspaceKey(key);
     const str = String(value);
     memoryMap.set(key, str);
     try {
@@ -25,6 +28,7 @@ export const safeStorage = {
     }
   },
   removeItem(key) {
+    key = workspaceKey(key);
     memoryMap.delete(key);
     try {
       window.localStorage.removeItem(key);
@@ -47,7 +51,7 @@ export const safeStorage = {
 };
 
 // ==================== IndexedDB Wrapper for Unlimited Chat & Photo History ====================
-const IDB_NAME = 'domashka_pro_db_v3';
+const IDB_NAME = workspaceDbName();
 const IDB_STORE = 'chats';
 const LS_FALLBACK_KEY = 'domashka_pro_notebook_history_v2';
 
@@ -210,6 +214,7 @@ export const chatStore = {
     provider_used = '',
     messages = [],
   }) {
+    ensureWorkspaceActive();
     const now = Math.floor(Date.now() / 1000);
     const id = globalThis.crypto?.randomUUID?.() || `chat-${Date.now()}-${++chatSequence}`;
     const autoTitle =
@@ -248,6 +253,7 @@ export const chatStore = {
 
     const db = await openChatDB();
     if (db) {
+      ensureWorkspaceActive();
       await new Promise((resolve) => {
         const tx = db.transaction(IDB_STORE, 'readwrite');
         tx.objectStore(IDB_STORE).put(record);
@@ -265,6 +271,7 @@ export const chatStore = {
   },
 
   async update(id, patch) {
+    ensureWorkspaceActive();
     const existing = await this.get(id);
     if (!existing) return null;
     const updated = {
@@ -274,6 +281,7 @@ export const chatStore = {
     };
     const db = await openChatDB();
     if (db) {
+      ensureWorkspaceActive();
       await new Promise((resolve) => {
         const tx = db.transaction(IDB_STORE, 'readwrite');
         tx.objectStore(IDB_STORE).put(updated);
@@ -296,8 +304,10 @@ export const chatStore = {
   },
 
   async delete(id) {
+    ensureWorkspaceActive();
     const db = await openChatDB();
     if (db) {
+      ensureWorkspaceActive();
       await new Promise((resolve) => {
         const tx = db.transaction(IDB_STORE, 'readwrite');
         tx.objectStore(IDB_STORE).delete(id);
@@ -312,8 +322,10 @@ export const chatStore = {
   },
 
   async clearAll() {
+    ensureWorkspaceActive();
     const db = await openChatDB();
     if (db) {
+      ensureWorkspaceActive();
       await new Promise((resolve) => {
         const tx = db.transaction(IDB_STORE, 'readwrite');
         tx.objectStore(IDB_STORE).clear();
@@ -340,6 +352,7 @@ export const chatStore = {
   },
 
   async importJson(jsonStr) {
+    ensureWorkspaceActive();
     const parsed = JSON.parse(jsonStr);
     const incoming = Array.isArray(parsed) ? parsed : parsed?.items;
     if (!Array.isArray(incoming)) {

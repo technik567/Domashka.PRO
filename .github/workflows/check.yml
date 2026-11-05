@@ -27,10 +27,10 @@ jobs:
           npm ci
           python -m pip install -r requirements.txt
       - name: JavaScript tests
-        run: npm test
+        run: npm test && npm run check:reference
       - name: Build the portable app
         run: npm run build:standalone
       - name: Python and distribution tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Ensure the downloadable HTML matches its sources
-        run: git diff --exit-code -- Domashka_PRO.html
+        run: git diff --exit-code -- Domashka_PRO.html USER_GUIDE.txt REFERENCE_COVERAGE.md
