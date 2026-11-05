@@ -100,6 +100,7 @@ class DistributionTests(unittest.TestCase):
                 guide = '# Инструкция\nПК, Android и iPhone.\n'
                 (root / 'USER_GUIDE.md').write_text(guide, encoding='utf-8')
                 build_standalone.build()
+            self.assertEqual((root / 'USER_GUIDE.txt').read_text(encoding='utf-8'), guide)
             html = (root / 'Domashka_PRO.html').read_bytes()
             self.assertEqual((root / 'static/Domashka_PRO.html').read_bytes(), html)
             with zipfile.ZipFile(root / 'Domashka_PRO_Portable.zip') as archive:
@@ -108,6 +109,7 @@ class DistributionTests(unittest.TestCase):
                 self.assertIn('HTTPS', archive.read('Domashka_PRO/КАК_ЗАПУСТИТЬ.txt').decode('utf-8'))
 
     def test_current_portable_archive_matches_committed_html_and_guide(self):
+        self.assertEqual((ROOT / 'USER_GUIDE.txt').read_bytes(), (ROOT / 'USER_GUIDE.md').read_bytes())
         archive_path = ROOT / 'Domashka_PRO_Portable.zip'
         if not archive_path.exists():
             self.skipTest('Run npm run build:standalone to check the portable ZIP.')

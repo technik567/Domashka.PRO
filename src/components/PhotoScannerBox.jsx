@@ -23,6 +23,7 @@ import {
 } from '../standalone/visionEngine';
 import { extractTextFromHomeworkFile } from '../standalone/docImporter';
 import { api } from '../api';
+import { ocrProgressLabel } from '../standalone/progressModel';
 import { getBrowserEnvironment, IOS_CAMERA_HELP } from '../standalone/browserEnvironment';
 
 const MAX_PHOTOS = 4;
@@ -402,7 +403,7 @@ export default function PhotoScannerBox({
         purpose,
         signal: ctrl.signal,
         onProgress: (info) => {
-          setOcrMessage(`${prefix}${info.message || 'Распознаём текст и формулы...'}`);
+          setOcrMessage(`${prefix}${ocrProgressLabel(info)}`);
         },
       },
       purpose
@@ -443,7 +444,7 @@ export default function PhotoScannerBox({
               purpose,
               signal: ctrl.signal,
               onProgress: (info) => {
-                setOcrMessage(`Фото ${i + 1} из ${updated.length}: ${info.message || 'читаем...'}`);
+                setOcrMessage(`Фото ${i + 1} из ${updated.length}: ${ocrProgressLabel(info, i, updated.length)}`);
               },
             },
             purpose
@@ -892,6 +893,7 @@ export default function PhotoScannerBox({
             </div>
           )}
 
+          {ocrLoading && <p className="text-[10px] text-slate-500">≈ — оценка этапа OCR, не внутренний процент нейросети. 100% только после готового текста.</p>}
           {ocrError && (
             <div className="text-xs text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-950/50 px-3 py-2 rounded-xl border border-rose-200 dark:border-rose-800">
               {ocrError}

@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import { CHEAT_SHEETS, GRADE_STAGE_GROUPS, SUBJECTS } from '../data/referenceData';
 import { copyTextSafe } from '../api';
+import { safeStorage } from '../standalone/storageEngine';
+import { filterCheatScope, sheetGradeLabel } from '../data/cheatCurriculum';
 import MarkdownMath from './MarkdownMath';
 import FlashcardsDeck, { buildFlashcardsFromSheets } from './FlashcardsDeck';
 
@@ -119,7 +121,7 @@ const CheatSheetCard = memo(function CheatSheetCard({
               card.stageId
             )}`}
           >
-            {card.grades}
+            {sheetGradeLabel(card)}
           </span>
           <button
             type="button"
@@ -226,14 +228,14 @@ const CheatSheetCard = memo(function CheatSheetCard({
 export default function CheatSheets({ grade = 7, onPracticeTopic, onSolveSample }) {
   const [query, setQuery] = useState('');
   const [subjFilter, setSubjFilter] = useState('all');
-  const [gradeFilter, setGradeFilter] = useState('all'); // 'all' | 'my' | 'bookmarks' | stageId
+  const [gradeFilter, setGradeFilter] = useState('my'); // strict 'all' | 'my' | 'bookmarks' | numeric grade
   const [copiedId, setCopiedId] = useState(null);
   const [collapsedIds, setCollapsedIds] = useState({});
   const [visibleLimit, setVisibleLimit] = useState(PAGE_STEP);
   const [flashcardModal, setFlashcardModal] = useState(null); // { cards, title }
   const [bookmarks, setBookmarks] = useState(() => {
     try {
-      const saved = JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '[]');
+      const saved = JSON.parse(safeStorage.getItem(BOOKMARKS_KEY) || '[]');
       return Array.isArray(saved) ? saved : [];
     } catch {
       return [];
@@ -242,7 +244,7 @@ export default function CheatSheets({ grade = 7, onPracticeTopic, onSolveSample 
 
   useEffect(() => {
     try {
-      localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
+      safeStorage.setItem(BOOKMARKS_KEY, JSON.stringify(bookmarks));
     } catch {
       // ignore storage quota errors
     }
@@ -251,7 +253,7 @@ export default function CheatSheets({ grade = 7, onPracticeTopic, onSolveSample 
   // Reset pagination whenever filters or search query change
   useEffect(() => {
     setVisibleLimit(PAGE_STEP);
-  }, [query, subjFilter, gradeFilter]);
+  }, [query, subjFilter, gradeFilter, grade]);
 
   const subjLabelMap = useMemo(() => {
     const m = {};
@@ -276,81 +278,44 @@ export default function CheatSheets({ grade = 7, onPracticeTopic, onSolveSample 
     }));
   }, [subjLabelMap]);
 
-  const { filtered, expandedFromGlobal } = useMemo(() => {
+  const gradeScoped = useMemo(() => filterCheatScope(indexedSheets, {
+    gradeFilter, grade, bookmarks,
+  }), [indexedSheets, gradeFilter, grade, bookmarks]);
+
+  const filtered = useMemo(() => {
     const queryNorm = normalizeSearchText(query);
-    const tokens = queryNorm ? queryNorm.split(' ').filter((t) => t.length >= 1) : [];
-
-    const runPass = (ignoreSubjAndGrade) => {
-      const out = [];
-      for (let i = 0; i < indexedSheets.length; i += 1) {
-        const item = indexedSheets[i];
-        if (!ignoreSubjAndGrade) {
-          if (subjFilter !== 'all' && item.subject !== subjFilter) continue;
-          if (gradeFilter === 'my') {
-            if (grade < item.minGrade || grade > item.maxGrade) continue;
-          } else if (gradeFilter === 'bookmarks') {
-            if (!bookmarks.includes(item.id)) continue;
-          } else if (gradeFilter !== 'all') {
-            if (item.stageId !== gradeFilter) continue;
-          }
-        }
-        if (!tokens.length) {
-          out.push({ item, score: 1 });
-        } else {
-          const sc = scoreSheetMatch(item, queryNorm, tokens);
-          if (sc > 0) out.push({ item, score: sc });
-        }
-      }
-      if (tokens.length) {
-        out.sort((a, b) => {
-          if (b.score !== a.score) return b.score - a.score;
-          return a.item.gradeOrder - b.item.gradeOrder;
-        });
-      }
-      return out.map((x) => x.item);
-    };
-
-    const strictMatches = runPass(false);
-    // If user typed a search query while a narrow grade/subject filter was active and got 0 matches,
-    // automatically surface global matches so search NEVER appears broken!
-    if (
-      strictMatches.length === 0 &&
-      tokens.length > 0 &&
-      gradeFilter !== 'bookmarks' &&
-      (subjFilter !== 'all' || gradeFilter !== 'all')
-    ) {
-      const globalMatches = runPass(true);
-      if (globalMatches.length > 0) {
-        return { filtered: globalMatches, expandedFromGlobal: true };
-      }
-    }
-
-    return { filtered: strictMatches, expandedFromGlobal: false };
-  }, [indexedSheets, query, subjFilter, gradeFilter, grade, bookmarks]);
+    const tokens = queryNorm ? queryNorm.split(' ').filter(Boolean) : [];
+    const scoped = gradeScoped.filter((item) => subjFilter === 'all' || item.subject === subjFilter);
+    if (!tokens.length) return scoped;
+    return scoped.map((item) => ({ item, score: scoreSheetMatch(item, queryNorm, tokens) }))
+      .filter(({ score }) => score > 0).sort((a, b) => b.score - a.score || a.item.gradeOrder - b.item.gradeOrder)
+      .map(({ item }) => item);
+  }, [gradeScoped, query, subjFilter]);
 
   const visibleItems = useMemo(() => {
     return filtered.slice(0, visibleLimit);
   }, [filtered, visibleLimit]);
 
   const groupedByStage = useMemo(() => {
-    // When user is actively searching, preserve relevance order within groups or show top matches immediately
+    if (!['all', 'bookmarks'].includes(gradeFilter)) return visibleItems.length ? [{ id: 'selected', title: `${gradeFilter === 'my' ? grade : gradeFilter} класс · выбранные материалы`, items: visibleItems, totalInStage: filtered.length }] : [];
+    // Group all-grade browsing by the original study stage.
     return GRADE_STAGE_GROUPS.map((group) => ({
       ...group,
       items: visibleItems.filter((item) => item.stageId === group.id),
       totalInStage: filtered.filter((item) => item.stageId === group.id).length,
     })).filter((g) => g.items.length > 0);
-  }, [visibleItems, filtered]);
+  }, [visibleItems, filtered, gradeFilter, grade]);
 
   const availableSubjects = useMemo(() => {
     const counts = {};
-    CHEAT_SHEETS.forEach((c) => {
+    gradeScoped.forEach((c) => {
       counts[c.subject] = (counts[c.subject] || 0) + 1;
     });
     return SUBJECTS.filter((s) => counts[s.id]).map((s) => ({
       ...s,
       count: counts[s.id],
     }));
-  }, []);
+  }, [gradeScoped]);
 
   const toggleBookmark = React.useCallback((id) => {
     setBookmarks((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -361,7 +326,7 @@ export default function CheatSheets({ grade = 7, onPracticeTopic, onSolveSample 
   }, []);
 
   const handleCopy = React.useCallback(async (card) => {
-    const ok = await copyTextSafe(`${card.title} (${card.grades})\n\n${card.content}`);
+    const ok = await copyTextSafe(`${card.title} (${sheetGradeLabel(card)})\n\n${card.content}`);
     if (ok) {
       setCopiedId(card.id);
       setTimeout(() => setCopiedId(null), 2000);
@@ -393,7 +358,7 @@ export default function CheatSheets({ grade = 7, onPracticeTopic, onSolveSample 
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-sm sm:text-base font-extrabold text-slate-900 dark:text-white">
-                  Мега-база шпаргалок ФГОС ({CHEAT_SHEETS.length} тем · по ≈50 на каждый предмет!)
+                  Школьная база шпаргалок · {CHEAT_SHEETS.length} карточек
                 </h2>
                 <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 font-bold">
                   Строго по классам: 1 → 11
@@ -497,15 +462,7 @@ export default function CheatSheets({ grade = 7, onPracticeTopic, onSolveSample 
             >
               🎯 Мой {grade} класс
             </button>
-            {[
-              { id: '1-2', label: '1–2 кл.' },
-              { id: '3-4', label: '3–4 кл. (ВПР)' },
-              { id: '5-6', label: '5–6 кл.' },
-              { id: '7', label: '7 кл.' },
-              { id: '8', label: '8 кл.' },
-              { id: '9', label: '9 кл. (ОГЭ)' },
-              { id: '10-11', label: '10–11 кл. (ЕГЭ)' },
-            ].map((st) => (
+            {Array.from({ length: 11 }, (_, i) => ({ id: String(i + 1), label: `${i + 1} кл.` })).map((st) => (
               <button
                 key={st.id}
                 type="button"
@@ -566,7 +523,7 @@ export default function CheatSheets({ grade = 7, onPracticeTopic, onSolveSample 
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700'
               }`}
             >
-              Все предметы ({CHEAT_SHEETS.length})
+              Все предметы ({gradeScoped.length})
             </button>
             {availableSubjects.map((s) => (
               <button
@@ -590,18 +547,14 @@ export default function CheatSheets({ grade = 7, onPracticeTopic, onSolveSample 
           <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800 text-xs">
             <div className="text-slate-600 dark:text-slate-300">
               Найдено шпаргалок: <b className="text-indigo-600 dark:text-indigo-400">{filtered.length}</b>
-              {expandedFromGlobal && (
-                <span className="ml-2 px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 font-semibold">
-                  Показаны результаты по всем классам и предметам!
-                </span>
-              )}
+
             </div>
             <button
               type="button"
               onClick={() => {
                 setQuery('');
                 setSubjFilter('all');
-                setGradeFilter('all');
+                setGradeFilter('my');
               }}
               className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
             >
@@ -610,6 +563,9 @@ export default function CheatSheets({ grade = 7, onPracticeTopic, onSolveSample 
           </div>
         )}
       </div>
+
+      <p className="text-xs text-slate-500 px-1">В «Мой класс» попадают только карточки, в диапазон которых входит выбранный класс. Общие темы отмечены диапазоном классов. Поиск сам не отключает фильтры.</p>
+      {!filtered.length && query.trim() && (gradeFilter !== 'all' || subjFilter !== 'all') && <button type="button" onClick={() => { setGradeFilter('all'); setSubjFilter('all'); }} className="rounded-xl border border-indigo-300 dark:border-indigo-700 px-4 py-2 text-sm font-bold text-indigo-600 dark:text-indigo-300">Искать по всем классам и предметам</button>}
 
       {/* Grouped cheat sheets ordered 1 -> 11 */}
       <div className="space-y-6">
@@ -683,7 +639,7 @@ export default function CheatSheets({ grade = 7, onPracticeTopic, onSolveSample 
               onClick={() => {
                 setQuery('');
                 setSubjFilter('all');
-                setGradeFilter('all');
+                setGradeFilter('my');
               }}
               className="text-xs px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 transition"
             >

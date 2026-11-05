@@ -1,3 +1,5 @@
+import { assertAiAllowed, subscribeAccounts } from './accounts';
+import { requestOpenRouter, OPENROUTER_TIMEOUT_MS } from './openRouterStream';
 import { normalizeCustomEndpoint, describeCustomNetworkError, isLoopbackHost } from './customConnection';
 import { getBrowserEnvironment } from './browserEnvironment';
 import { normalizePhotos, choosePhotoPlan, withOpenAiImages } from './photoPayload';
@@ -238,7 +240,7 @@ async function callServerProxyAi({
       tutorOnly, tutorGrade, tutorSubject,
       supportsVision: getPhotoCapability({ provider, model, customVision }).maxImages > 0,
     }),
-  }, provider === 'custom' ? 135000 : 30000, signal);
+  }, provider === 'custom' ? 135000 : provider === 'openrouter' ? OPENROUTER_TIMEOUT_MS + 15000 : 30000, signal);
   let data;
   try { data = await res.json(); } catch { throw new Error('Python API недоступен по этому адресу. Статический хостинг/GitHub Pages не запускает сервер Ollama.'); }
   if (!res.ok || !data?.ok || !String(data.text || '').trim()) throw new Error(data?.error || `Сервер ИИ: HTTP ${res.status}, пустой ответ.`);
@@ -246,56 +248,11 @@ async function callServerProxyAi({
     extractedPhotoText: data.extractedPhotoText || ocrText || '', visionEngineLabel: data.visionEngineLabel || '' };
 }
 
-async function callOpenRouterBrowser(apiKey, model, systemPrompt, messages, imageB64, onStatus, signal) {
-  onStatus?.({ stage: 'cloud', message: 'Отправляем запрос в OpenRouter AI...' });
-  const orMsgs = [{ role: 'system', content: systemPrompt }, ...withOpenAiImages(messages, imageB64 || [])];
-
-  const candidates = [model || 'openrouter/free'];
-
-
-  let lastErr = '';
-  for (const cand of candidates) {
-    throwIfUserAborted(signal);
-    try {
-      onStatus?.({ stage: 'cloud', message: `Генерируем ответ (${cand})...` });
-      const res = await fetchWithTimeout(
-        'https://openrouter.ai/api/v1/chat/completions',
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${apiKey.trim()}`,
-            'Content-Type': 'application/json',
-            'X-Title': 'Domashka.PRO',
-          },
-          body: JSON.stringify({
-            model: cand,
-            messages: orMsgs,
-            temperature: 0.35,
-            max_tokens: systemPrompt.includes('ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА РЕПЕТИТОРА') ? 900 : 4000,
-          }),
-        },
-        22000,
-        signal
-      );
-      if (res.ok) {
-        const data = await res.json();
-        const content = data?.choices?.[0]?.message?.content || '';
-        const usedModel = data?.model || cand;
-        if (content.trim()) {
-          return { text: normalizeLatex(content), used: `OpenRouter (${usedModel})` };
-        }
-      } else if (res.status === 401 || res.status === 403) {
-        throw new Error('Неверный API-ключ OpenRouter. Проверьте ключ в Настройках ИИ.');
-      } else {
-        lastErr = `HTTP ${res.status}`;
-      }
-    } catch (e) {
-      if (e?.name === 'AbortError' && signal?.aborted) throw e;
-      if (String(e.message || '').includes('Неверный API-ключ')) throw e;
-      lastErr = e.message;
-    }
-  }
-  throw new Error(`Не удалось получить ответ от OpenRouter (${lastErr}). Проверьте подключение к интернету.`);
+async function callOpenRouterBrowser(apiKey, model, systemPrompt, messages, images, onStatus, signal) {
+  const result = await requestOpenRouter({ apiKey, model: model || 'openrouter/free',
+    messages: [{ role: 'system', content: systemPrompt }, ...withOpenAiImages(messages, images || [])],
+    tutor: systemPrompt.includes('ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА РЕПЕТИТОРА'), signal, onStatus });
+  return { ...result, text: normalizeLatex(result.text) };
 }
 
 async function callGeminiBrowser(apiKey, model, systemPrompt, messages, imageB64, onStatus, signal) {
@@ -738,12 +695,14 @@ export function getPhotoCapability({ provider = 'builtin', model, customVision =
 }
 
 export async function generateAiBrowser(options) {
+  assertAiAllowed();
   const locked = isTutorModeEnabled();
   const tutorOnly = locked || options.fallbackMode === 'tutor';
   const controller = new AbortController();
   const onAbort = () => controller.abort();
   if (options.signal?.aborted) onAbort();
   else options.signal?.addEventListener('abort', onAbort, { once: true });
+  const stopAccounts = subscribeAccounts(() => { try { assertAiAllowed(); } catch { controller.abort(); } });
   const unsubscribe = subscribeParentalControl(() => {
     if (isTutorModeEnabled() !== locked) controller.abort();
   });
@@ -768,8 +727,10 @@ export async function generateAiBrowser(options) {
       signal: controller.signal,
     });
     throwIfUserAborted(controller.signal);
+    options.onStatus?.({ stage: 'format', message: 'Ответ получен. Обрабатываем результат…' });
     return result;
   } finally {
+    stopAccounts();
     unsubscribe();
     options.signal?.removeEventListener('abort', onAbort);
   }
@@ -799,11 +760,12 @@ async function generateAiRequest({
     const pageTexts = [];
     for (let index = 0; index < photos.length; index += 1) {
       const rec = await recognizeHomeworkPhoto(photos[index], { purpose, signal, onProgress: (info) => onStatus?.({
-        stage: 'vision', message: `OCR: фото ${index + 1} из ${photos.length}. ${info?.message || 'Модель получит распознанный текст, а не изображение.'}`,
+        stage: 'vision', progress: Math.floor((index + Math.min(99, info?.progress || 0) / 100) / photos.length * 100), estimated: true, photoInputUsed: 'ocr', message: `OCR: фото ${index + 1} из ${photos.length}. ${info?.message || 'Модель получит распознанный текст, а не изображение.'}`,
       }) });
       if (!rec?.text?.trim()) throw new Error(`Не удалось прочитать фото ${index + 1}. Выберите режим «Само фото» с Vision-моделью или исправьте снимок.`);
       pageTexts.push(photos.length > 1 ? `[Фото ${index + 1}]:\n${rec.text}` : rec.text);
       if (rec.engine) visionEngineLabel = rec.engine;
+      onStatus?.({ stage: 'vision', progress: Math.floor((index + 1) / photos.length * 100), estimated: false, photoInputUsed: 'ocr', message: `Прочитано фото: ${index + 1} из ${photos.length}.` });
     }
     resolvedOcrText = pageTexts.join('\n\n');
   }
@@ -814,13 +776,13 @@ async function generateAiRequest({
   }
   if (nativePhotos.length) {
     systemPrompt += '\nРассмотри сами приложенные изображения: рисунки, графики, схемы и пространственные связи, а не только текст. Если детали неразборчивы, уточни их; не выдумывай. Соблюдай все правила выбранного учебного режима.';
-    onStatus?.({ stage: 'vision', message: `Отправляем само изображение (${nativePhotos.length}) в Vision-модель, без предварительного OCR…` });
+    onStatus?.({ stage: 'vision', photoInputUsed: 'vision', progress: 100, estimated: false, message: `Подготовлены фото (${nativePhotos.length}) для Vision-модели, без предварительного OCR…` });
   }
   const finish = (out) => ({ ...out, extractedPhotoText: resolvedOcrText, visionEngineLabel,
     photoInputUsed, photoCount: photos.length });
 
   if (canUseServerProxy() && (provider !== 'custom' || customTransport === 'server')) {
-    onStatus?.({ stage: nativePhotos.length ? 'vision' : 'thinking', message: provider === 'custom'
+    onStatus?.({ stage: 'cloud', photoInputUsed, message: provider === 'custom'
       ? 'Ollama через ваш Python-сервер. Первая загрузка модели может занять до двух минут…'
       : nativePhotos.length ? 'Передаём само фото модели через сервер…' : 'ИИ готовит ответ…' });
     try {
@@ -831,6 +793,7 @@ async function generateAiRequest({
     } catch (error) {
       throwIfUserAborted(signal);
       // A selected local transport never silently switches to the phone's localhost or a cloud provider.
+      if (provider === 'openrouter' || provider === 'gemini') throw error;
       if (provider === 'custom') {
         if (error?.name === 'TimeoutError') throw new Error('Истекло ожидание Python-сервера (135 секунд). Проверьте Ollama и загрузку модели на компьютере.');
         if (error instanceof TypeError || /failed to fetch|load failed|networkerror/i.test(error?.message || '')) throw new Error('Не удалось связаться с вашим Python-сервером. Проверьте, что server.py работает и страница открыта с его адреса. GitHub Pages и скачанный HTML не предоставляют этот API.');

@@ -14,6 +14,7 @@ import {
   Sun,
   ShieldCheck,
   LockKeyhole,
+  Users,
 } from 'lucide-react';
 import {
   getActiveAuthPayload,
@@ -26,6 +27,8 @@ import {
   recordStudentActivity,
 } from './api';
 import { APP_VERSION } from './version';
+import FamilyAccounts, { FamilyAccountBar } from './components/FamilyAccounts';
+import { getCurrentAccount, getManagedChild } from './standalone/accounts';
 import { safeStorage } from './standalone/storageEngine';
 import { EXAM_GOALS } from './data/referenceData';
 import HomeworkSolver from './components/HomeworkSolver';
@@ -41,6 +44,7 @@ import { getParentalStatus, subscribeParentalControl } from './standalone/parent
 import { getModelLabel } from './standalone/modelCatalog';
 
 const SECONDARY_SECTIONS = [
+  { id: 'family', label: 'Семья', icon: Users, activeCls: 'bg-indigo-600 text-white shadow-sm' },
   {
     id: 'checker',
     label: 'Проверить',
@@ -74,7 +78,8 @@ const SECONDARY_SECTIONS = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('solver');
+  const [activeTab, setActiveTab] = useState(() => getCurrentAccount()?.role === 'parent' ? 'family' : 'solver');
+  const managedChild = getManagedChild();
   const [profile, setProfile] = useState(() => loadStudentProfile());
   const [aiSettings, setAiSettings] = useState(() => loadAiSettings());
   const [theme, setTheme] = useState(() => loadTheme());
@@ -82,7 +87,7 @@ export default function App() {
   const [parentOpen, setParentOpen] = useState(false);
   const [parentStatus, setParentStatus] = useState(getParentalStatus);
   const tutorOnly = parentStatus.enabled;
-  const sections = tutorOnly ? SECONDARY_SECTIONS.filter((section) => ['diary', 'cheats'].includes(section.id)) : SECONDARY_SECTIONS;
+  const sections = tutorOnly ? SECONDARY_SECTIONS.filter((section) => ['diary', 'cheats', 'family'].includes(section.id)) : SECONDARY_SECTIONS;
 
   useEffect(() => subscribeParentalControl(() => setParentStatus(getParentalStatus())), []);
 
@@ -105,15 +110,22 @@ export default function App() {
   }, [theme]);
 
   useEffect(() => {
-    setActiveTab('solver'); setLoadedItem(null); setPrefillTask(null); setPrefillQuiz(null);
+    setActiveTab((current) => ['diary', 'cheats', 'family'].includes(current) ? current : 'solver'); setLoadedItem(null); setPrefillTask(null); setPrefillQuiz(null);
     setActiveChatId(null); setSettingsOpen(false); setSidebarMobileOpen(false);
     window.speechSynthesis?.cancel();
   }, [tutorOnly]);
 
   function openAiSettings() {
+    if (managedChild) { setActiveTab('family'); return; }
     if (tutorOnly) setParentOpen(true);
     else setSettingsOpen(true);
   }
+
+  useEffect(() => {
+    const refreshSharedSettings = (event) => { if (getManagedChild() && (!event.key || event.key.endsWith('::domashka_pro_ai_settings_v2'))) setAiSettings(loadAiSettings()); };
+    window.addEventListener('storage', refreshSharedSettings);
+    return () => window.removeEventListener('storage', refreshSharedSettings);
+  }, []);
 
   const authInfo = getActiveAuthPayload(aiSettings);
   const isLocalFile = typeof window !== 'undefined' && window.location.protocol === 'file:';
@@ -138,6 +150,7 @@ export default function App() {
   }
 
   function handleSaveAi(nextSettings) {
+    if (managedChild) { setActiveTab('family'); return; }
     if (getParentalStatus().enabled) { setParentOpen(true); return; }
     const saved = saveAiSettings(nextSettings);
     setAiSettings(saved);
@@ -246,6 +259,8 @@ export default function App() {
               <select
                 value={profile.grade}
                 onChange={(e) => updateGrade(e.target.value)}
+                disabled={Boolean(managedChild)}
+                title={managedChild ? 'Класс меняет родитель в семейном кабинете' : 'Класс обучения'}
                 aria-label="Выберите класс"
                 className="w-[84px] sm:w-auto bg-white dark:bg-slate-900 text-slate-900 dark:text-white font-extrabold text-[11px] sm:text-xs px-1.5 sm:px-2.5 py-1 sm:py-1.5 rounded-lg border border-slate-200/80 dark:border-slate-700 outline-none cursor-pointer"
               >
@@ -275,6 +290,7 @@ export default function App() {
               <select
                 value={profile.examGoal}
                 onChange={(e) => updateGoal(e.target.value)}
+                disabled={Boolean(managedChild)}
                 aria-label="Цель обучения"
                 className="ml-1 bg-transparent text-slate-700 dark:text-slate-200 font-bold text-xs px-2 py-1.5 rounded-lg outline-none cursor-pointer hidden md:block"
               >
@@ -313,7 +329,7 @@ export default function App() {
               <span title={providerBadgeLabel} className="hidden lg:inline max-w-[150px] truncate">{providerBadgeLabel}</span>
             </button>
 
-            <button type="button" onClick={() => setParentOpen(true)} aria-label="Детский режим и родительский пароль" title={tutorOnly ? 'Детский режим включён' : 'Включить детский режим'} className={`p-2 sm:px-3 rounded-xl border inline-flex items-center gap-1.5 text-xs font-bold ${tutorOnly ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'}`}>
+            <button type="button" onClick={() => managedChild ? setActiveTab('family') : setParentOpen(true)} aria-label="Детский режим и родительский пароль" title={tutorOnly ? 'Детский режим включён' : 'Включить детский режим'} className={`p-2 sm:px-3 rounded-xl border inline-flex items-center gap-1.5 text-xs font-bold ${tutorOnly ? 'bg-emerald-600 border-emerald-600 text-white' : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'}`}>
               {tutorOnly ? <LockKeyhole className="w-4 h-4" /> : <ShieldCheck className="w-4 h-4" />}<span className="hidden xl:inline">Детский режим</span>
             </button>
             {/* Download Standalone HTML when on HTTP Server */}
@@ -332,8 +348,10 @@ export default function App() {
           </div>
         </div>
       </header>
+      <FamilyAccountBar onOpen={() => setActiveTab('family')} />
+      {managedChild?.policy.allowAi === false && <div className="bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 p-2 text-center text-xs">ИИ и OCR отключены родителем. Семейные задания, дневник и локальные материалы доступны.</div>}
 
-      {tutorOnly && <div className="no-print px-4 py-2.5 bg-emerald-50 dark:bg-emerald-950/50 border-b border-emerald-200 dark:border-emerald-900 text-emerald-900 dark:text-emerald-200 text-xs flex flex-wrap items-center justify-center gap-2"><ShieldCheck className="w-4 h-4" /><strong>Детский режим: только репетитор.</strong><span>Сначала твоя попытка, затем подсказка. Обычные чаты сохранены и скрыты.</span><button type="button" onClick={() => setParentOpen(true)} className="font-bold underline underline-offset-2">Для родителей</button></div>}
+      {tutorOnly && <div className="no-print px-4 py-2.5 bg-emerald-50 dark:bg-emerald-950/50 border-b border-emerald-200 dark:border-emerald-900 text-emerald-900 dark:text-emerald-200 text-xs flex flex-wrap items-center justify-center gap-2"><ShieldCheck className="w-4 h-4" /><strong>Детский режим: только репетитор.</strong><span>Сначала твоя попытка, затем подсказка. Обычные чаты сохранены и скрыты.</span><button type="button" onClick={() => managedChild ? setActiveTab('family') : setParentOpen(true)} className="font-bold underline underline-offset-2">Для родителей</button></div>}
       {/* Main Layout: ONE Left Chat Sidebar + Centered Spacious Workspace */}
       <div className="flex-1 flex w-full min-w-0">
         <ChatSidebar
@@ -417,10 +435,11 @@ export default function App() {
 
             {/* Active Workspace View */}
             <div key={`workspace-${tutorOnly}`}>
+              {activeTab === 'family' && <FamilyAccounts />}
               {activeTab === 'solver' && (
                 <HomeworkSolver
                   tutorOnly={tutorOnly}
-                  onChangeAiSettings={handleSaveAi}
+                  onChangeAiSettings={managedChild ? undefined : handleSaveAi}
                   profile={profile}
                   aiSettings={aiSettings}
                   onOpenAiSettings={openAiSettings}
@@ -491,7 +510,7 @@ export default function App() {
       {/* Thumb-Friendly Sticky Mobile Bottom Navigation Bar */}
       <nav
         aria-label="Мобильная навигация"
-        className={`no-print md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-t border-slate-200 dark:border-slate-800 px-1 py-1.5 grid ${tutorOnly ? 'grid-cols-3' : 'grid-cols-6'} gap-0.5 shadow-[0_-4px_20px_rgba(15,23,42,0.08)]`}
+        className={`no-print md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 dark:bg-slate-900/95 backdrop-blur border-t border-slate-200 dark:border-slate-800 px-1 py-1.5 grid ${tutorOnly ? 'grid-cols-4' : 'grid-cols-7'} gap-0.5 shadow-[0_-4px_20px_rgba(15,23,42,0.08)]`}
       >
         <button
           type="button"

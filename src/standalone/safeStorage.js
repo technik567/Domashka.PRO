@@ -1,41 +1,5 @@
-const memoryStore = new Map();
-
-export const safeStorage = {
-  getItem(key) {
-    try {
-      return window.localStorage.getItem(key);
-    } catch {
-      return memoryStore.has(key) ? memoryStore.get(key) : null;
-    }
-  },
-  setItem(key, value) {
-    const str = String(value);
-    memoryStore.set(key, str);
-    try {
-      window.localStorage.setItem(key, str);
-    } catch {
-      // Sandboxed iframe or private mode fallback
-    }
-  },
-  removeItem(key) {
-    memoryStore.delete(key);
-    try {
-      window.localStorage.removeItem(key);
-    } catch {
-      // Ignore
-    }
-  },
-  isPersistent() {
-    try {
-      const testKey = '__domashka_test__';
-      window.localStorage.setItem(testKey, '1');
-      window.localStorage.removeItem(testKey);
-      return true;
-    } catch {
-      return false;
-    }
-  },
-};
+import { safeStorage } from './storageEngine';
+export { safeStorage };
 
 const HISTORY_KEY = 'domashka_pro_notebook_history_v2';
 

@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Bell, CalendarDays, Clock, Plus, RotateCcw } from 'lucide-react';
 import { SUBJECTS } from '../data/referenceData';
+import { WORKSPACE_ID } from '../standalone/accounts';
 import { safeStorage } from '../standalone/storageEngine';
+import { MAX_LESSONS, DEFAULT_BELLS, normalizeBells, normalizeTimetable, buildBellRows } from '../standalone/timetable';
 
 const TIMETABLE_KEY = 'domashka_timetable_v30';
 const BELLS_KEY = 'domashka_bells_v30';
@@ -24,25 +26,8 @@ const DEFAULT_TIMETABLE = {
   sat: ['', '', '', '', '', '', ''],
 };
 
-const DEFAULT_BELL_CONFIG = {
-  firstStart: '08:30',
-  lessonMin: 45,
-  breaks: [10, 15, 20, 15, 10, 10], // breaks after lessons 1..6
-};
-
-function parseHm(hm) {
-  const [h, m] = String(hm || '08:30').split(':').map(Number);
-  return (Number.isFinite(h) ? h : 8) * 60 + (Number.isFinite(m) ? m : 30);
-}
-
-function fmtHm(totalMin) {
-  const norm = ((totalMin % 1440) + 1440) % 1440;
-  const h = String(Math.floor(norm / 60)).padStart(2, '0');
-  const m = String(norm % 60).padStart(2, '0');
-  return `${h}:${m}`;
-}
-
 export default function TimetableAndBells({ onQuickAddHomework }) {
+  const initialTimetable = useMemo(() => WORKSPACE_ID ? Object.fromEntries(DAYS.map((day) => [day.id, []])) : DEFAULT_TIMETABLE, []);
   const realSubjects = useMemo(() => SUBJECTS.filter((s) => s.id !== 'auto'), []);
   const todayJsDay = new Date().getDay(); // 0 Sun .. 6 Sat
   const initialDay = DAYS.find((d) => d.jsDay === todayJsDay)?.id || 'mon';
@@ -55,18 +40,18 @@ export default function TimetableAndBells({ onQuickAddHomework }) {
   const [timetable, setTimetable] = useState(() => {
     try {
       const raw = JSON.parse(safeStorage.getItem(TIMETABLE_KEY) || 'null');
-      return raw && typeof raw === 'object' ? { ...DEFAULT_TIMETABLE, ...raw } : DEFAULT_TIMETABLE;
+      return normalizeTimetable(raw, initialTimetable, realSubjects.map((s) => s.id));
     } catch {
-      return DEFAULT_TIMETABLE;
+      return normalizeTimetable(null, initialTimetable, realSubjects.map((s) => s.id));
     }
   });
 
   const [bellCfg, setBellCfg] = useState(() => {
     try {
       const raw = JSON.parse(safeStorage.getItem(BELLS_KEY) || 'null');
-      return raw && typeof raw === 'object' ? { ...DEFAULT_BELL_CONFIG, ...raw } : DEFAULT_BELL_CONFIG;
+      return normalizeBells(raw);
     } catch {
-      return DEFAULT_BELL_CONFIG;
+      return normalizeBells(null);
     }
   });
 
@@ -83,26 +68,7 @@ export default function TimetableAndBells({ onQuickAddHomework }) {
     return () => clearInterval(id);
   }, []);
 
-  const scheduleRows = useMemo(() => {
-    let cur = parseHm(bellCfg.firstStart);
-    const dur = Math.max(30, Math.min(60, Number(bellCfg.lessonMin) || 45));
-    const rows = [];
-    for (let i = 0; i < 7; i += 1) {
-      const start = cur;
-      const end = cur + dur;
-      const breakMin = bellCfg.breaks[i] ?? 10;
-      rows.push({
-        num: i + 1,
-        start,
-        end,
-        startStr: fmtHm(start),
-        endStr: fmtHm(end),
-        breakAfter: i < 6 ? breakMin : 0,
-      });
-      cur = end + breakMin;
-    }
-    return rows;
-  }, [bellCfg]);
+  const scheduleRows = useMemo(() => buildBellRows(bellCfg), [bellCfg]);
 
   const liveBellStatus = useMemo(() => {
     const d = new Date(nowTick);
@@ -110,14 +76,17 @@ export default function TimetableAndBells({ onQuickAddHomework }) {
       return { badge: 'Выходной (воскресенье)', tone: 'slate' };
     }
     const nowMin = d.getHours() * 60 + d.getMinutes();
-    const first = scheduleRows[0];
-    const last = scheduleRows[scheduleRows.length - 1];
+    const todayId = DAYS.find((day) => day.jsDay === d.getDay())?.id;
+    const liveRows = scheduleRows.filter((row) => timetable[todayId]?.[row.num - 1]);
+    if (!liveRows.length) return { badge: 'На сегодня уроки не записаны', tone: 'slate' };
+    const first = liveRows[0];
+    const last = liveRows[liveRows.length - 1];
     if (nowMin < first.start) {
       const diff = first.start - nowMin;
       return {
         badge:
           diff <= 90
-            ? `До 1-го урока осталось ${diff} мин (начало в ${first.startStr})`
+            ? `До ${first.num}-го урока осталось ${diff} мин (начало в ${first.startStr})`
             : `Уроки начинаются в ${first.startStr}`,
         tone: 'indigo',
       };
@@ -125,17 +94,17 @@ export default function TimetableAndBells({ onQuickAddHomework }) {
     if (nowMin >= last.end) {
       return { badge: 'Уроки на сегодня завершены — время отдыха и домашки!', tone: 'emerald' };
     }
-    for (let i = 0; i < scheduleRows.length; i += 1) {
-      const r = scheduleRows[i];
+    for (let i = 0; i < liveRows.length; i += 1) {
+      const r = liveRows[i];
       if (nowMin >= r.start && nowMin < r.end) {
         const left = r.end - nowMin;
         return {
           badge: `🔔 Сейчас идёт ${r.num}-й урок · до звонка на перемену: ${left} мин (${r.endStr})`,
           tone: 'amber',
-          activeLessonIdx: i,
+          activeLessonIdx: r.num - 1,
         };
       }
-      const nextR = scheduleRows[i + 1];
+      const nextR = liveRows[i + 1];
       if (nextR && nowMin >= r.end && nowMin < nextR.start) {
         const left = nextR.start - nowMin;
         return {
@@ -145,11 +114,11 @@ export default function TimetableAndBells({ onQuickAddHomework }) {
       }
     }
     return { badge: 'Расписание звонков активно', tone: 'slate' };
-  }, [nowTick, scheduleRows]);
+  }, [nowTick, scheduleRows, timetable]);
 
   const updateLesson = (dayId, idx, subjId) => {
     setTimetable((prev) => {
-      const nextDay = [...(prev[dayId] || Array(7).fill(''))];
+      const nextDay = [...(prev[dayId] || Array(MAX_LESSONS).fill(''))];
       nextDay[idx] = subjId;
       return { ...prev, [dayId]: nextDay };
     });
@@ -169,7 +138,7 @@ export default function TimetableAndBells({ onQuickAddHomework }) {
     setTimeout(() => setAddedBanner(''), 2500);
   };
 
-  const dayLessons = timetable[activeDay] || Array(7).fill('');
+  const dayLessons = timetable[activeDay] || Array(MAX_LESSONS).fill('');
 
   return (
     <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 sm:p-5 shadow-sm space-y-4">
@@ -228,27 +197,49 @@ export default function TimetableAndBells({ onQuickAddHomework }) {
               <option value={35}>35 мин (1 кл.)</option>
             </select>
           </label>
+          <label className="inline-flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-200">
+            Уроков в расписании:
+            <select aria-label="Количество уроков" value={bellCfg.lessonCount}
+              onChange={(e) => setBellCfg((p) => ({ ...p, lessonCount: Number(e.target.value) }))}
+              className="px-2 py-1 rounded-lg border bg-white dark:bg-slate-900 dark:border-slate-700">
+              {Array.from({ length: MAX_LESSONS }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
+            </select>
+          </label>
         </div>
 
         <button
           type="button"
-          onClick={() => {
-            setTimetable(DEFAULT_TIMETABLE);
-            setBellCfg(DEFAULT_BELL_CONFIG);
-          }}
+          onClick={() => setBellCfg(normalizeBells(DEFAULT_BELLS))}
           className="text-[11px] font-semibold text-slate-500 hover:text-rose-600 inline-flex items-center gap-1"
         >
           <RotateCcw className="w-3 h-3" />
-          По умолчанию
+          Сбросить звонки
         </button>
       </div>
+
+      <fieldset className="rounded-xl border border-slate-200 dark:border-slate-700 p-3">
+        <legend className="px-1 text-xs font-bold">Каждая перемена отдельно · минуты</legend>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {bellCfg.breaks.slice(0, bellCfg.lessonCount - 1).map((minutes, i) => (
+            <label key={i} className="flex items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-300">
+              После {i + 1}-го урока
+              <input type="number" min="0" max="60" step="1" inputMode="numeric"
+                aria-label={`Перемена после ${i + 1}-го урока`} value={minutes}
+                onChange={(e) => setBellCfg((p) => normalizeBells({ ...p,
+                  breaks: p.breaks.map((n, j) => j === i ? (e.target.value === '' ? 0 : e.target.value) : n) }))}
+                className="w-16 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 p-1.5 text-center font-bold" />
+            </label>
+          ))}
+        </div>
+        <p className="text-[11px] text-slate-500 mt-2">От 0 до 60 минут. Звонки пересчитываются сразу. Скрытые уроки и перемены сохраняются при уменьшении их количества.</p>
+      </fieldset>
 
       {/* Day switcher */}
       <div className="grid grid-cols-6 gap-1.5">
         {DAYS.map((d) => {
           const isToday = d.jsDay === todayJsDay;
           const active = activeDay === d.id;
-          const filledCount = (timetable[d.id] || []).filter(Boolean).length;
+          const filledCount = (timetable[d.id] || []).slice(0, bellCfg.lessonCount).filter(Boolean).length;
           return (
             <button
               key={d.id}
@@ -278,7 +269,7 @@ export default function TimetableAndBells({ onQuickAddHomework }) {
         </div>
       )}
 
-      {/* Lessons list 1..7 */}
+      {/* Lessons list 1..9 */}
       <div className="space-y-2">
         {scheduleRows.map((row, idx) => {
           const subjId = dayLessons[idx] || '';
@@ -311,6 +302,7 @@ export default function TimetableAndBells({ onQuickAddHomework }) {
               </div>
 
               <select
+                aria-label={`Предмет ${row.num}-го урока`}
                 value={subjId}
                 onChange={(e) => updateLesson(activeDay, idx, e.target.value)}
                 className="sm:w-56 px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-900 dark:text-white outline-none"

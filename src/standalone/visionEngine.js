@@ -1,3 +1,4 @@
+import { assertAiAllowed, subscribeAccounts } from './accounts';
 import { raceFirstSuccess } from './network';
 
 /**
@@ -709,6 +710,20 @@ async function tryLocalTesseractOcr(dataUri, onProgress, externalSignal) {
  * Fast, parallelized, and strictly time-bounded so it NEVER hangs on any stage!
  */
 export async function recognizeHomeworkPhoto(imageDataUri, optsOrCallback = {}) {
+  assertAiAllowed();
+  const options = typeof optsOrCallback === 'function' ? { onProgress: optsOrCallback } : optsOrCallback;
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (options.signal?.aborted) abort();
+  else options.signal?.addEventListener('abort', abort, { once: true });
+  const unsubscribe = subscribeAccounts(() => { try { assertAiAllowed(); } catch { abort(); } });
+  try {
+    const result = await recognizeHomeworkPhotoInternal(imageDataUri, { ...options, signal: controller.signal });
+    throwIfUserAborted(controller.signal); assertAiAllowed(); return result;
+  } finally { unsubscribe(); options.signal?.removeEventListener('abort', abort); }
+}
+
+async function recognizeHomeworkPhotoInternal(imageDataUri, optsOrCallback = {}) {
   const onProgress =
     typeof optsOrCallback === 'function' ? optsOrCallback : optsOrCallback?.onProgress;
   const purpose =

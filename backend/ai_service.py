@@ -411,13 +411,13 @@ def _call_openrouter(
                 "model": candidate_model,
                 "messages": or_messages,
                 "temperature": 0.35,
-                "max_tokens": 900 if "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА РЕПЕТИТОРА" in system_prompt else 3500,
+                "max_tokens": 1600 if "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА РЕПЕТИТОРА" in system_prompt else 6000,
             }
             r = httpx.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers=headers,
                 json=payload,
-                timeout=26.0,
+                timeout=httpx.Timeout(300.0, connect=15.0),
             )
             if r.status_code == 200:
                 data = r.json()
@@ -426,12 +426,24 @@ def _call_openrouter(
                 content = msg_obj.get("content") or ""
                 used_model = data.get("model") or candidate_model
                 if content.strip():
+                    if choice.get("finish_reason") == "length":
+                        content += "\n\n> ⚠️ Ответ остановлен лимитом токенов модели и может быть неполным. Попросите продолжить."
+                    if choice.get("finish_reason") in ("error", "content_filter"):
+                        raise RuntimeError("OpenRouter не завершил ответ: ошибка модели или фильтр содержимого.")
                     return _normalize_latex_delimiters(content), f"OpenRouter ({used_model})"
                 last_err = "Пустой ответ от модели"
-            elif r.status_code in (401, 403):
+            elif r.status_code == 429:
+                raise RuntimeError("OpenRouter: достигнут лимит запросов. Подождите и повторите самостоятельно.")
+            elif r.status_code == 402:
+                raise RuntimeError("OpenRouter: недостаточно средств или исчерпан бюджет ключа.")
+            elif r.status_code == 403:
+                raise RuntimeError("OpenRouter: доступ запрещён. Проверьте разрешения ключа, модель и ограничения региона.")
+            elif r.status_code == 401:
                 raise RuntimeError(f"Неверный API-ключ OpenRouter (код {r.status_code}). Проверьте ключ в Настройках ИИ.")
             else:
                 last_err = f"HTTP {r.status_code}"
+        except httpx.TimeoutException:
+            raise RuntimeError("OpenRouter не ответил за отведённое время (до 5 минут ожидания). Автоматического повтора нет; провайдер может ещё обрабатывать запрос.")
         except RuntimeError:
             raise
         except Exception as exc:

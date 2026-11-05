@@ -1,5 +1,7 @@
-const STORAGE_KEY = 'domashka_parental_control_v1';
-const ATTEMPTS_KEY = 'domashka_parental_attempts_v1';
+import { workspaceKey, isChildWorkspace, getManagedChild, subscribeAccounts, ensureWorkspaceActive } from './accounts';
+
+const STORAGE_KEY = workspaceKey('domashka_parental_control_v1');
+const ATTEMPTS_KEY = workspaceKey('domashka_parental_attempts_v1');
 const ITERATIONS = 310000;
 const listeners = new Set();
 let lastKnownConfig = null;
@@ -24,6 +26,10 @@ function readConfig() {
 }
 
 export function getParentalStatus() {
+  if (isChildWorkspace()) {
+    const child = getManagedChild();
+    return { enabled: child ? child.policy.tutorOnly : true, configured: true, managed: true, corrupted: !child };
+  }
   const config = readConfig();
   return { enabled: Boolean(config?.enabled), configured: Boolean(config?.hash), corrupted: Boolean(config?.corrupted) };
 }
@@ -38,11 +44,13 @@ function notify() {
 
 export function subscribeParentalControl(listener) {
   listeners.add(listener);
+  const stopAccounts = subscribeAccounts(listener);
   const onStorage = (event) => {
     if (event.key === STORAGE_KEY || event.key === null) listener();
   };
   window.addEventListener('storage', onStorage);
   return () => {
+    stopAccounts();
     listeners.delete(listener);
     window.removeEventListener('storage', onStorage);
   };
@@ -110,6 +118,8 @@ async function verifyPassword(password, config) {
 }
 
 export async function setTutorModeEnabled(enabled, password) {
+  ensureWorkspaceActive();
+  if (isChildWorkspace()) throw new Error('Режим ученика меняет родитель в разделе «Семья». Выйдите и войдите под родительским логином.');
   const config = readConfig();
   if (config) {
     await verifyPassword(password, config);
@@ -125,6 +135,8 @@ export async function setTutorModeEnabled(enabled, password) {
 }
 
 export async function changeParentPassword(currentPassword, nextPassword) {
+  ensureWorkspaceActive();
+  if (isChildWorkspace()) throw new Error('Управление защитой доступно только родителю.');
   checkPasswordLength(nextPassword);
   const config = readConfig();
   await verifyPassword(currentPassword, config);

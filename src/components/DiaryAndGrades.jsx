@@ -21,6 +21,8 @@ import {
 } from 'lucide-react';
 import { SUBJECTS } from '../data/referenceData';
 import TimetableAndBells from './TimetableAndBells';
+import FamilyHomeworkBoard from './FamilyHomeworkBoard';
+import { getManagedChild, WORKSPACE_ID } from '../standalone/accounts';
 import ExamScoreCalculator from './ExamScoreCalculator';
 import { safeStorage } from '../standalone/storageEngine';
 
@@ -145,7 +147,7 @@ export default function DiaryAndGrades({ grade = 7, onSolveTask, onEarnXp }) {
     } catch {
       // ignore
     }
-    return DEFAULT_TASKS;
+    return WORKSPACE_ID ? [] : DEFAULT_TASKS;
   });
 
   const [newSubj, setNewSubj] = useState('math');
@@ -206,10 +208,11 @@ export default function DiaryAndGrades({ grade = 7, onSolveTask, onEarnXp }) {
       targetDayObj = dayMap.find((d) => d.id === syncDay) || dayMap[0];
     }
 
-    let tt = FALLBACK_TIMETABLE;
+    const defaults = WORKSPACE_ID ? Object.fromEntries(Object.keys(FALLBACK_TIMETABLE).map((day) => [day, []])) : FALLBACK_TIMETABLE;
+    let tt = defaults;
     try {
       const savedTt = JSON.parse(safeStorage.getItem(TIMETABLE_KEY) || 'null');
-      if (savedTt && typeof savedTt === 'object') tt = { ...FALLBACK_TIMETABLE, ...savedTt };
+      if (savedTt && typeof savedTt === 'object') tt = { ...defaults, ...savedTt };
     } catch {
       // ignore
     }
@@ -269,6 +272,7 @@ export default function DiaryAndGrades({ grade = 7, onSolveTask, onEarnXp }) {
     } catch {
       // ignore
     }
+    if (WORKSPACE_ID) return {};
     return {
       math: [
         { id: 'g1', val: 5, w: 2 }, // домашка
@@ -1177,6 +1181,7 @@ export default function DiaryAndGrades({ grade = 7, onSolveTask, onEarnXp }) {
         </div>
       )}
 
+      {getManagedChild() && <div className="rounded-2xl border border-indigo-200 dark:border-indigo-800 p-4 bg-white dark:bg-slate-900"><FamilyHomeworkBoard compact /></div>}
       {(diaryView === 'all' || diaryView === 'timetable') && (
         <TimetableAndBells onQuickAddHomework={handleQuickAddFromTimetable} />
       )}
