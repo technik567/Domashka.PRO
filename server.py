@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict
 from urllib.parse import parse_qs, unquote, urlparse
 
-from backend import ai_service, database, solvers
+from backend import ai_service, database, solvers, ollama_service
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(ROOT_DIR, "static")
@@ -23,6 +23,24 @@ mimetypes.add_type("font/woff", ".woff")
 mimetypes.add_type("font/ttf", ".ttf")
 
 
+def prepare_request_photos(data, purpose="solve"):
+    provider = data.get("provider", "builtin")
+    api_key = str(data.get("apiKey") or "").strip()
+    if provider not in ("builtin", "openrouter", "gemini", "custom"):
+        raise ValueError("Неизвестный провайдер ИИ.")
+    if provider in ("openrouter", "gemini") and not api_key:
+        raise ValueError("Для выбранного провайдера требуется ваш API-ключ.")
+    photos = data.get("images")
+    if photos is None:
+        photos = [data["imageBase64"]] if data.get("imageBase64") else []
+    native, ocr, label = ai_service.prepare_photo_input(
+        provider, data.get("model", ""), photos, data.get("ocrText", ""),
+        data.get("photoMode", "auto"), data.get("supportsVision"), purpose, api_key,
+    )
+    used = "vision" if native else "ocr" if (photos or ocr) else "none"
+    return photos, native, ocr, label, used
+
+
 class DomashkaHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -34,9 +52,10 @@ class DomashkaHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        if not getattr(self, "_ollama_request", False):
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
@@ -46,9 +65,13 @@ class DomashkaHandler(BaseHTTPRequestHandler):
         if length <= 0:
             return {}
         if length > 25 * 1024 * 1024:
+            self.close_connection = True
             raise ValueError("Файл слишком большой (максимум 25 МБ).")
         raw = self.rfile.read(length)
-        return json.loads(raw.decode("utf-8"))
+        value = json.loads(raw.decode("utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("Нужен JSON-объект.")
+        return value
 
     def do_OPTIONS(self) -> None:
         self.send_response(204)
@@ -71,7 +94,7 @@ class DomashkaHandler(BaseHTTPRequestHandler):
 
         try:
             if path == "/api/health":
-                self._send_json(200, {"ok": True, "app": "Домашка.ПРО", "version": "3.4"})
+                self._send_json(200, {"ok": True, "app": "Домашка.ПРО", "version": "3.5"})
                 return
 
             if path == "/api/models":
@@ -103,8 +126,17 @@ class DomashkaHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
+        self._ollama_request = False
         try:
             data = self._read_json()
+            self._ollama_request = data.get("provider") == "custom"
+            if self._ollama_request:
+                try:
+                    ollama_service.validate_browser_origin(self.headers.get("Origin", ""), self.headers.get("Host", ""))
+                    ollama_service.configured_endpoint()
+                except ValueError as exc:
+                    self._send_json(403, {"ok": False, "error": str(exc)})
+                    return
             tutor_only = data.get("tutorOnly") is True
             if tutor_only and path in ("/api/check-draft", "/api/exact"):
                 self._send_json(403, {"ok": False, "error": "В детском режиме доступен только репетитор."})
@@ -147,21 +179,7 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                 ocr_text = (data.get("ocrText") or "").strip()
                 purpose = data.get("purpose", "solve")
 
-                resolved_ocr = ocr_text
-                vision_label = ""
-                clean_key = (api_key or "").strip()
-                is_direct_vision = (provider == "gemini" and bool(clean_key)) or (
-                    provider == "openrouter" and bool(clean_key) and
-                    (data["supportsVision"] if isinstance(data.get("supportsVision"), bool) else ai_service.is_openrouter_vision_model(model))
-                )
-                if image_b64 and not is_direct_vision and not resolved_ocr:
-                    resolved_ocr, vision_label = ai_service.recognize_photo_server(
-                        image_b64=image_b64,
-                        purpose=purpose,
-                        provider=provider,
-                        api_key=clean_key,
-                        model=model,
-                    )
+                photos, native_photos, resolved_ocr, vision_label, photo_input_used = prepare_request_photos(data, purpose)
 
                 ans_md, provider_used = ai_service.generate_ai_response(
                     provider=provider,
@@ -169,7 +187,8 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                     model=model,
                     system_prompt=system_prompt,
                     messages=messages,
-                    image_b64=image_b64 if is_direct_vision else None,
+                    images=native_photos,
+                    photo_mode="vision" if native_photos else "ocr",
                     ocr_text=resolved_ocr,
                     purpose=purpose,
                     tutor_only=tutor_only,
@@ -186,6 +205,7 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                         "used": final_used,
                         "extractedPhotoText": resolved_ocr,
                         "visionEngineLabel": vision_label,
+                        "photoInputUsed": photo_input_used,
                     },
                 )
                 return
@@ -201,8 +221,9 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                 provider = data.get("provider", "builtin")
                 api_key = data.get("apiKey", "")
                 model = data.get("model", "")
+                photos, native_photos, ocr_text, vision_label, photo_input_used = prepare_request_photos(data, "solve")
 
-                if not task_text and not image_b64 and not ocr_text:
+                if not task_text and not photos and not ocr_text:
                     self._send_json(
                         400,
                         {"ok": False, "error": "Введите текст домашнего задания или прикрепите фотографию / скриншот."},
@@ -227,8 +248,14 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                     model=model,
                     system_prompt=sys_prompt,
                     messages=messages,
-                    image_b64=image_b64,
+                    images=native_photos,
+                    photo_mode="vision" if native_photos else "ocr",
                     ocr_text=ocr_text,
+                    vision_capable=data.get("supportsVision"),
+                    purpose="solve",
+                    tutor_only=mode == "tutor",
+                    tutor_grade=grade,
+                    tutor_subject=subject,
                 )
 
                 conv_messages = [
@@ -242,7 +269,7 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                     subject=subject,
                     mode=mode,
                     task_text=task_text or (ocr_text[:200] if ocr_text else "Задание по фото"),
-                    has_image=bool(image_b64),
+                    has_image=bool(photos),
                     response_md=ans_md,
                     sympy_badge=sympy_badge,
                     provider_used=provider_used,
@@ -257,6 +284,8 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                         "markdown": ans_md,
                         "sympyBadge": sympy_badge,
                         "providerUsed": provider_used,
+                        "photoInputUsed": photo_input_used,
+                        "extractedPhotoText": ocr_text,
                         "messages": conv_messages,
                     },
                 )
@@ -274,6 +303,7 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                 provider = data.get("provider", "builtin")
                 api_key = data.get("apiKey", "")
                 model = data.get("model", "")
+                photos, native_photos, ocr_text, vision_label, photo_input_used = prepare_request_photos(data, "solve")
 
                 if action == "board_prep":
                     prompt_q = (
@@ -315,6 +345,14 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                     model=model,
                     system_prompt=sys_prompt,
                     messages=updated_msgs,
+                    images=native_photos,
+                    photo_mode="vision" if native_photos else "ocr",
+                    ocr_text=ocr_text,
+                    vision_capable=data.get("supportsVision"),
+                    purpose="solve",
+                    tutor_only=mode == "tutor",
+                    tutor_grade=grade,
+                    tutor_subject=subject,
                 )
                 updated_msgs.append({"role": "assistant", "content": ans_md})
                 if history_id:
@@ -329,6 +367,8 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                         "ok": True,
                         "reply": ans_md,
                         "providerUsed": provider_used,
+                        "photoInputUsed": photo_input_used,
+                        "extractedPhotoText": ocr_text,
                         "messages": updated_msgs,
                     },
                 )
@@ -345,8 +385,9 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                 provider = data.get("provider", "builtin")
                 api_key = data.get("apiKey", "")
                 model = data.get("model", "")
+                photos, native_photos, ocr_text, vision_label, photo_input_used = prepare_request_photos(data, "check")
 
-                if not draft_text and not image_b64 and not ocr_text:
+                if not draft_text and not photos and not ocr_text:
                     self._send_json(
                         400,
                         {"ok": False, "error": "Напишите свой ответ/сочинение или прикрепите фото своей тетради для проверки."},
@@ -369,8 +410,11 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                     model=model,
                     system_prompt=sys_prompt,
                     messages=[{"role": "user", "content": full_user_msg}],
-                    image_b64=image_b64,
+                    images=native_photos,
+                    photo_mode="vision" if native_photos else "ocr",
                     ocr_text=ocr_text,
+                    vision_capable=data.get("supportsVision"),
+                    purpose="check",
                 )
 
                 conv_messages = [
@@ -384,7 +428,7 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                     subject=subject,
                     mode="checker",
                     task_text=condition_text or (draft_text[:160] if draft_text else "Проверка черновика по фото"),
-                    has_image=bool(image_b64),
+                    has_image=bool(photos),
                     response_md=ans_md,
                     sympy_badge="",
                     provider_used=provider_used,
@@ -398,6 +442,8 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                         "id": item_id,
                         "markdown": ans_md,
                         "providerUsed": provider_used,
+                        "photoInputUsed": photo_input_used,
+                        "extractedPhotoText": ocr_text,
                         "messages": conv_messages,
                     },
                 )

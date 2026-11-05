@@ -21,7 +21,8 @@ describe('API + history', () => {
     const result = await api.solveHomework({ ...request, imageBase64: photos[0], imagesList: photos });
     expect(result.ok).toBe(true);
     expect((await chatStore.get(result.id)).images_b64).toEqual(photos);
-    expect(vision.recognizeHomeworkPhoto).toHaveBeenCalledTimes(2);
+    expect(vision.recognizeHomeworkPhoto).not.toHaveBeenCalled();
+    expect(aiClient.generateAiBrowser.mock.calls[0][0].images).toEqual(photos);
   });
   it('forces child requests into tutor mode and never returns an exact answer badge', async () => {
     await setTutorModeEnabled(true, 'parent-password');
@@ -64,6 +65,45 @@ describe('API + history', () => {
     const generate = vi.spyOn(aiClient, 'generateAiBrowser').mockResolvedValue({ text: 'next hint', used: 'mock' });
     await api.chatFollowup({ ...request, historyId: original.id, messages: [{ role: 'user', content: 'Фото' }], action: 'question', question: 'Как начать?' });
     expect(generate.mock.calls[0][0].imageB64).toBe('data:image/png;base64,AAAA');
+  });
+  it.each(['auto', 'vision'])('does not inject stale OCR math into a native-image %s request', async (photoMode) => {
+    const generate = vi.spyOn(aiClient, 'generateAiBrowser').mockResolvedValue({ text: 'Вижу рисунок', used: 'mock', photoInputUsed: 'vision' });
+    const result = await api.solveHomework({ ...request, taskText: '', imagesList: ['data:image/png;base64,AAAA'], photoMode, ocrText: 'x = 1234' });
+    expect(result.ok).toBe(true); expect(result.sympyBadge).toBe('');
+    expect(generate.mock.calls[0][0].systemPrompt).not.toContain('1234');
+    expect(generate.mock.calls[0][0].ocrText).toBe('');
+  });
+  it('round-trips all native images and mode through backup and strict follow-up', async () => {
+    const photos = ['data:image/png;base64,AAAA', 'data:image/png;base64,BBBB'];
+    const generate = vi.spyOn(aiClient, 'generateAiBrowser').mockResolvedValue({ text: 'Подсказка', used: 'mock', photoInputUsed: 'vision' });
+    const solved = await api.solveHomework({ ...request, imagesList: photos, photoMode: 'vision' });
+    expect(solved.photoInputUsed).toBe('vision');
+    const backup = await chatStore.exportJson();
+    await chatStore.clearAll(); await chatStore.importJson(backup);
+    const restored = await chatStore.get(solved.id);
+    expect(restored).toMatchObject({ images_b64: photos, photo_mode: 'vision', photo_input_used: 'vision' });
+    // An incidental OCR field must not cause a saved diagram to disappear from native follow-ups.
+    await chatStore.update(solved.id, { ocr_text: 'старое распознавание' });
+    await api.chatFollowup({ ...request, historyId: solved.id, messages: solved.messages, action: 'question', question: 'А второй рисунок?' });
+    expect(generate.mock.calls.at(-1)[0]).toMatchObject({ images: photos, photoMode: 'vision' });
+  });
+  it('saves native images and mode for draft checking, not just solving', async () => {
+    const photos = ['data:image/png;base64,AAAA', 'data:image/png;base64,BBBB'];
+    vi.spyOn(aiClient, 'generateAiBrowser').mockResolvedValue({ text: 'Комментарий к схеме', used: 'mock', photoInputUsed: 'vision' });
+    const checked = await api.checkDraft({ grade: 6, conditionText: 'Проверь схему', imagesList: photos, photoMode: 'vision', checkType: 'general' });
+    expect(checked.ok).toBe(true);
+    expect(await chatStore.get(checked.id)).toMatchObject({ images_b64: photos, photo_mode: 'vision', photo_input_used: 'vision' });
+  });
+  it('refuses to downgrade a saved Vision conversation to a text-only gateway', async () => {
+    const original = await chatStore.saveNew({ images_b64: ['data:image/png;base64,AAAA'], photo_input_used: 'vision', photo_mode: 'auto', response_md: 'Подсказка' });
+    const ocr = vi.spyOn(vision, 'recognizeHomeworkPhoto');
+    const result = await api.chatFollowup({ ...request, model: 'pollinations', historyId: original.id, messages: [{ role: 'user', content: 'Схема' }], action: 'question', question: 'Что дальше?' });
+    expect(result.ok).toBe(false); expect(result.error).toContain('не настроена');
+    expect(fetch).not.toHaveBeenCalled(); expect(ocr).not.toHaveBeenCalled();
+  });
+  it('normalizes untrusted photo-mode fields during import', async () => {
+    await chatStore.importJson(JSON.stringify({ items: [{ id: 'bad-photo-mode', response_md: 'Ответ', photo_mode: 'unexpected', photo_input_used: '<script>' }] }));
+    expect(await chatStore.get('bad-photo-mode')).toMatchObject({ photo_mode: 'auto', photo_input_used: 'none' });
   });
   it('does not trust an imported tutor-only flag', async () => {
     await chatStore.importJson(JSON.stringify({ items: [{ id: 'imported', response_md: 'Ответ', tutor_only: true }] }));

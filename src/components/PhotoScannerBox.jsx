@@ -18,11 +18,12 @@ import {
 } from 'lucide-react';
 import {
   createDemoHomeworkDataUri,
-  fileToDataUri,
+  preparePhotoFile,
   transformImageCanvas,
 } from '../standalone/visionEngine';
 import { extractTextFromHomeworkFile } from '../standalone/docImporter';
 import { api } from '../api';
+import { getBrowserEnvironment, IOS_CAMERA_HELP } from '../standalone/browserEnvironment';
 
 const MAX_PHOTOS = 4;
 
@@ -78,9 +79,19 @@ export default function PhotoScannerBox({
   onInsertOcrToTask,
   onRemoveOcrFromTask,
   onOpenDrawingPad,
+  photoMode = 'auto',
+  onChangePhotoMode,
+  maxVisionImages = 0,
+  localProvider = false,
+  busy = false,
+  onBusyChange,
   purpose = 'solve', // 'solve' | 'check'
   compactLabel = 'Фото задания (до 4 снимков) или файл .docx / .pdf / .txt',
 }) {
+  const environment = getBrowserEnvironment();
+  const [cameraHelp, setCameraHelp] = useState(false);
+  const [photoLoading, setPhotoLoading] = useState(false);
+  const loadVersion = useRef(0);
   const primaryImage = imageBase64Prop || imageDataUri || '';
 
   const fileInputRef = useRef(null);
@@ -115,13 +126,21 @@ export default function PhotoScannerBox({
   const [dragStart, setDragStart] = useState(null);
   const [cropBox, setCropBox] = useState({ x: 0.06, y: 0.08, w: 0.88, h: 0.84 });
 
-  useEffect(() => () => { ocrAbortRef.current?.abort(); }, []);
+  useEffect(() => () => { ocrAbortRef.current?.abort(); loadVersion.current++; }, []);
+  useEffect(() => { onBusyChange?.(photoLoading || ocrLoading); }, [photoLoading, ocrLoading, onBusyChange]);
+  useEffect(() => () => { onBusyChange?.(false); }, [onBusyChange]);
+  const invalidatePhotoWork = () => {
+    loadVersion.current++;
+    ocrAbortRef.current?.abort(); ocrAbortRef.current = null;
+    setPhotoLoading(false); setOcrLoading(false); setOcrMessage('');
+  };
 
   // Parent props are authoritative for paste, history restore, and clearing a task.
   useEffect(() => {
     const incoming = imagesList?.length ? imagesList : primaryImage ? [primaryImage] : [];
     const samePhotos = incoming.length === photos.length && incoming.every((uri, index) => uri === photos[index]?.uri);
     if (!samePhotos) {
+      loadVersion.current++; setPhotoLoading(false);
       ocrAbortRef.current?.abort(); ocrAbortRef.current = null;
       setOcrLoading(false); setOcrError(''); setOcrMessage(''); setCropMode(false); setActiveIdx(0);
       setPhotos(incoming.slice(0, MAX_PHOTOS).map((uri) => ({
@@ -151,6 +170,7 @@ export default function PhotoScannerBox({
   };
 
   const appendPhotoFiles = async (fileList) => {
+    if (photoLoading || ocrLoading || busy) return;
     const files = Array.from(fileList || []);
     if (!files.length) return;
 
@@ -172,7 +192,7 @@ export default function PhotoScannerBox({
       return;
     }
 
-    const imageFiles = files.filter((f) => f.type.startsWith('image/') || /\.(jpe?g|png|webp|bmp|gif)$/i.test(f.name || ''));
+    const imageFiles = files.filter((f) => f.type.startsWith('image/') || /\.(jpe?g|png|webp|bmp|gif|heic|heif)$/i.test(f.name || ''));
     if (!imageFiles.length) return;
 
     const slotsLeft = MAX_PHOTOS - photos.length;
@@ -181,24 +201,30 @@ export default function PhotoScannerBox({
       return;
     }
 
+    if (photoLoading || busy) return;
+    const operation = ++loadVersion.current;
+    setPhotoLoading(true);
     setOcrError('');
     const added = [];
     for (const file of imageFiles.slice(0, slotsLeft)) {
       try {
-        const uri = await fileToDataUri(file);
-        const processed = await transformImageCanvas(uri, { filterMode: 'original', maxDim: 1650 });
+        const processed = await preparePhotoFile(file);
+        if (operation !== loadVersion.current) return;
         added.push({
           id: makePhotoId(),
           uri: processed,
-          rawUri: uri,
+          rawUri: processed,
           filterMode: 'original',
           text: '',
           engine: '',
         });
       } catch (err) {
+        if (operation !== loadVersion.current) return;
         setOcrError(err.message || 'Ошибка чтения изображения');
       }
     }
+    if (operation !== loadVersion.current) return;
+    setPhotoLoading(false);
     if (added.length > 0) {
       const next = [...photos, ...added];
       syncParentFromPhotos(next);
@@ -212,14 +238,16 @@ export default function PhotoScannerBox({
   };
 
   const handleImportDocumentFile = async (file) => {
-    if (!file) return;
+    if (!file || photoLoading || ocrLoading || busy) return;
+    const operation = ++loadVersion.current;
     setOcrError('');
     setOcrLoading(true);
     setOcrMessage(`Читаем файл «${file.name}»...`);
     try {
       const { text, sourceLabel } = await extractTextFromHomeworkFile(file, {
-        onProgress: (msg) => setOcrMessage(msg),
+        onProgress: (msg) => { if (operation === loadVersion.current) setOcrMessage(msg); },
       });
+      if (operation !== loadVersion.current) return;
       if (importedDoc?.text) {
         onRemoveOcrFromTask?.(importedDoc.text);
       }
@@ -227,10 +255,11 @@ export default function PhotoScannerBox({
       onInsertOcrToTask?.(text);
       setOcrMessage('');
     } catch (err) {
+      if (operation !== loadVersion.current) return;
       setOcrError(err.message || 'Не удалось прочитать документ');
       setOcrMessage('');
     } finally {
-      setOcrLoading(false);
+      if (operation === loadVersion.current) setOcrLoading(false);
     }
   };
 
@@ -256,28 +285,28 @@ export default function PhotoScannerBox({
     syncParentFromPhotos(next);
   };
 
-  const handleRotate90 = async () => {
-    if (!currentPhoto) return;
-    if (currentPhoto.text) onRemoveOcrFromTask?.(currentPhoto.text);
-    const rotated = await transformImageCanvas(currentPhoto.uri, {
-      rotateDeg: 90,
-      filterMode: 'original',
-      maxDim: 1650,
-    });
-    updateCurrentPhoto({ uri: rotated, rawUri: rotated, filterMode: 'original', text: '', engine: '' });
+  const transformCurrentPhoto = async (options, filterMode = 'original', keepOriginal = false) => {
+    if (!currentPhoto || busy || photoLoading || ocrLoading) return;
+    const operation = ++loadVersion.current;
+    setPhotoLoading(true); setOcrError('');
+    try {
+      const uri = await transformImageCanvas(keepOriginal ? currentPhoto.rawUri || currentPhoto.uri : currentPhoto.uri, { maxDim: 1650, ...options });
+      if (operation !== loadVersion.current) return;
+      if (currentPhoto.text) onRemoveOcrFromTask?.(currentPhoto.text);
+      updateCurrentPhoto({ uri, rawUri: keepOriginal ? currentPhoto.rawUri : uri, filterMode, text: '', engine: '' });
+      setCropMode(false);
+    } catch (error) {
+      if (operation === loadVersion.current) setOcrError(error.message || 'Не удалось обработать фото.');
+    } finally {
+      if (operation === loadVersion.current) setPhotoLoading(false);
+    }
   };
-
-  const handleSwitchFilter = async (nextFilter) => {
-    if (!currentPhoto) return;
-    const base = currentPhoto.rawUri || currentPhoto.uri;
-    const updated = await transformImageCanvas(base, {
-      filterMode: nextFilter,
-      maxDim: 1650,
-    });
-    updateCurrentPhoto({ uri: updated, filterMode: nextFilter });
-  };
+  const handleRotate90 = () => transformCurrentPhoto({ rotateDeg: 90, filterMode: 'original' });
+  const handleSwitchFilter = (filterMode) => transformCurrentPhoto({ filterMode }, filterMode, true);
 
   const movePhotoOrder = (fromIdx, delta) => {
+    if (busy) return;
+    invalidatePhotoWork();
     const toIdx = fromIdx + delta;
     if (toIdx < 0 || toIdx >= photos.length) return;
     const next = [...photos];
@@ -291,6 +320,8 @@ export default function PhotoScannerBox({
    * Deletes one photo AND strips its recognized text from the AI prompt field!
    */
   const handleDeletePhotoAt = (idxToRemove) => {
+    if (busy) return;
+    invalidatePhotoWork();
     const target = photos[idxToRemove];
     if (!target) return;
     // Strip recognized text belonging to this photo (or fallback ocrText if single photo was auto-scanned)
@@ -309,6 +340,8 @@ export default function PhotoScannerBox({
    * Clears ALL attached photos AND removes all recognized photo texts from the AI prompt field!
    */
   const handleClearAllPhotos = () => {
+    if (busy) return;
+    invalidatePhotoWork();
     for (const p of photos) {
       if (p.text) onRemoveOcrFromTask?.(p.text);
     }
@@ -349,19 +382,10 @@ export default function PhotoScannerBox({
 
   const endCropDrag = () => setDragStart(null);
 
-  const confirmCrop = async () => {
-    if (!currentPhoto) return;
-    if (currentPhoto.text) onRemoveOcrFromTask?.(currentPhoto.text);
-    const cropped = await transformImageCanvas(currentPhoto.uri, {
-      cropRect: cropBox,
-      filterMode: 'original',
-      maxDim: 1650,
-    });
-    updateCurrentPhoto({ uri: cropped, rawUri: cropped, filterMode: 'original', text: '', engine: '' });
-    setCropMode(false);
-  };
+  const confirmCrop = () => transformCurrentPhoto({ cropRect: cropBox, filterMode: 'original' });
 
   const handleCancelVisionOcr = () => {
+    loadVersion.current++;
     ocrAbortRef.current?.abort();
     ocrAbortRef.current = null;
     setOcrLoading(false);
@@ -387,7 +411,8 @@ export default function PhotoScannerBox({
   };
 
   const handleRunVisionOcr = async (scanAll = false) => {
-    if (!photos.length || ocrLoading) return;
+    if (photoMode === 'vision') { setOcrError('Выбран режим «Само фото». Для отдельного распознавания текста явно переключите способ на OCR.'); return; }
+    if (!photos.length || ocrLoading || photoLoading || busy) return;
     const ctrl = new AbortController();
     ocrAbortRef.current = ctrl;
     setOcrLoading(true);
@@ -502,21 +527,16 @@ export default function PhotoScannerBox({
         </div>
 
         <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-1.5">
-          {/* Direct mobile rear-camera capture */}
-          {photos.length < MAX_PHOTOS && (
-            <label className="cursor-pointer inline-flex items-center justify-center gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white px-3 py-2 sm:py-1.5 rounded-xl font-bold transition shadow-sm sm:hidden">
-              <Camera className="w-3.5 h-3.5 shrink-0" />
-              <span>Камера</span>
-              <input
-                ref={cameraInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                onChange={handleFileSelect}
-                className="hidden"
-              />
-            </label>
-          )}
+          {/* Do not invoke native capture in iOS local/embedded viewers: the host app may crash outside JS. */}
+          {photos.length < MAX_PHOTOS && <>
+            <button type="button" disabled={busy || photoLoading || ocrLoading} onClick={() => {
+              if (environment.unsafeNativeMedia) setCameraHelp(true);
+              else cameraInputRef.current?.click();
+            }} className="inline-flex items-center justify-center gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-xl font-bold sm:hidden disabled:opacity-50" aria-label="Камера для фото задания">
+              <Camera className="w-3.5 h-3.5 shrink-0" /><span>{environment.unsafeNativeMedia ? 'Как снять фото' : 'Камера'}</span>
+            </button>
+            {!environment.unsafeNativeMedia && <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" onChange={handleFileSelect} disabled={busy || photoLoading || ocrLoading} className="hidden" aria-label="Снять фото задания" />}
+          </>}
 
           {/* Gallery / Multi-photo picker */}
           {photos.length < MAX_PHOTOS && (
@@ -526,6 +546,8 @@ export default function PhotoScannerBox({
               <span className="hidden sm:inline">{photos.length ? `+ Добавить фото (${photos.length}/${MAX_PHOTOS})` : 'Загрузить фото'}</span>
               <input
                 ref={fileInputRef}
+                disabled={busy || photoLoading || ocrLoading}
+                aria-label="Выбрать готовые фото"
                 type="file"
                 accept="image/*"
                 multiple
@@ -544,6 +566,7 @@ export default function PhotoScannerBox({
             <span>Файл (.docx / .pdf)</span>
             <input
               ref={docInputRef}
+              disabled={busy || photoLoading || ocrLoading}
               type="file"
               accept=".docx,.pdf,.txt,.md,.csv,application/pdf,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               onChange={handleDocInputSelect}
@@ -554,6 +577,7 @@ export default function PhotoScannerBox({
           {onOpenDrawingPad && (
             <button
               type="button"
+              disabled={busy || photoLoading || ocrLoading}
               onClick={onOpenDrawingPad}
               className="inline-flex items-center justify-center gap-1.5 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-indigo-400 px-2.5 py-2 sm:py-1.5 rounded-xl font-medium transition"
               title="Нарисовать формулу, схему или дробь от руки"
@@ -566,6 +590,7 @@ export default function PhotoScannerBox({
           {photos.length === 0 && (
             <button
               type="button"
+              disabled={busy || photoLoading || ocrLoading}
               onClick={loadDemoPhoto}
               className="inline-flex items-center justify-center gap-1 text-xs bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 hover:bg-amber-100 px-2.5 py-2 sm:py-1.5 rounded-xl font-semibold transition"
               title={
@@ -580,6 +605,19 @@ export default function PhotoScannerBox({
           )}
         </div>
       </div>
+
+      {(environment.unsafeNativeMedia || cameraHelp) && <p role="status" className="text-xs leading-relaxed rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 p-3 text-amber-900 dark:text-amber-200">{IOS_CAMERA_HELP}</p>}
+      {photoLoading && <p role="status" className="text-xs text-indigo-700 dark:text-indigo-300">Уменьшаем фото для телефона…</p>}
+      {onChangePhotoMode && <div className="rounded-xl border border-sky-200 dark:border-sky-800 bg-sky-50/50 dark:bg-sky-950/30 p-3 space-y-2">
+        <label htmlFor={`photo-mode-${purpose}`} className="block text-xs font-bold">Как передать фото нейросети</label>
+        <select id={`photo-mode-${purpose}`} value={photoMode} disabled={busy || photoLoading || ocrLoading} onChange={(event) => onChangePhotoMode(event.target.value)} className="w-full min-w-0 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 p-2 text-xs text-slate-900 dark:text-white">
+          <option value="auto">Авто: изображение, если модель поддерживает</option>
+          <option value="vision">Само фото (Vision), без подмены на OCR</option>
+          <option value="ocr">Только распознанный текст (OCR)</option>
+        </select>
+        <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">{maxVisionImages > 0 ? `Выбранная модель может получить само изображение: до ${maxVisionImages} фото за запрос. Vision учитывает рисунки и схемы, но может ошибаться.` : 'Выбранная модель не настроена для изображений. Для режима «Само фото» выберите Vision-модель; OCR передаёт только текст и может потерять рисунок.'} {photoMode === 'auto' && (localProvider ? 'Для Ollama без Vision OCR нужно выбрать явно: автоматической отправки фото в стороннее облако нет.' : 'В авто при превышении лимита изображений используется OCR.')} {photoMode === 'vision' && 'При ошибке фото не заменяется распознанным текстом.'}</p>
+        <p className="text-[10px] text-slate-500 dark:text-slate-400">В Vision фото передаётся выбранному провайдеру. OCR — отдельная обработка, которая может использовать сторонние облачные сервисы, даже если язык обрабатывает Ollama.</p>
+      </div>}
 
       {/* Imported Document Badge (with 1-click removal of its extracted text!) */}
       {importedDoc && (
@@ -748,7 +786,7 @@ export default function PhotoScannerBox({
               <button
                 type="button"
                 onClick={() => handleRunVisionOcr(false)}
-                disabled={ocrLoading}
+                disabled={ocrLoading || busy || photoLoading || photoMode === 'vision'}
                 className="flex-1 sm:flex-initial justify-center inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold transition shadow-sm"
                 title="Прочитать рукописный или печатный текст и формулы с текущего фото"
               >
@@ -770,7 +808,7 @@ export default function PhotoScannerBox({
                 <button
                   type="button"
                   onClick={() => handleRunVisionOcr(true)}
-                  disabled={ocrLoading}
+                  disabled={ocrLoading || busy || photoLoading || photoMode === 'vision'}
                   className="inline-flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-bold transition shadow-sm"
                   title="Распознать все прикреплённые фотографии подряд"
                 >

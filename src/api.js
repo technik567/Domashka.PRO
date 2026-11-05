@@ -29,10 +29,12 @@ import {
   generateExamVariantBrowser,
   generateMistakeDrillBrowser,
   isKnownOpenRouterVisionModel,
+  getPhotoCapability,
 } from './standalone/aiClient';
 import {
   fileToDataUri,
   transformImageCanvas,
+  preparePhotoFile,
   recognizeHomeworkPhoto,
 } from './standalone/visionEngine';
 import { runLocalExpressCheck } from './standalone/localDraftPreCheck';
@@ -51,6 +53,8 @@ export const DEFAULT_AI_SETTINGS = {
   customBaseUrl: 'http://localhost:11434/v1',
   customModel: 'qwen2.5:7b',
   customKey: '',
+  customTransport: 'direct',
+  customVision: false,
 };
 
 export const DEFAULT_PROFILE = {
@@ -79,6 +83,7 @@ export function loadAiSettings() {
 }
 
 export function saveAiSettings(settings) {
+  if (isTutorModeEnabled()) throw new Error('Настройки ИИ меняет родитель после отключения детского режима паролем.');
   const merged = { ...DEFAULT_AI_SETTINGS, ...settings };
   safeStorage.setItem(SETTINGS_KEY, JSON.stringify(merged));
   return merged;
@@ -126,7 +131,9 @@ export function getActiveAuthPayload(aiSettings) {
       apiKey: (s.customKey || '').trim(),
       model: (s.customModel || 'qwen2.5:7b').trim(),
       customBaseUrl: (s.customBaseUrl || 'http://localhost:11434/v1').trim(),
-      hasDirectVision: false,
+      customTransport: s.customTransport || 'direct',
+      customVision: s.customVision === true,
+      hasDirectVision: s.customVision === true,
     };
   }
   return {
@@ -134,7 +141,7 @@ export function getActiveAuthPayload(aiSettings) {
     apiKey: '',
     model: s.builtinModel || 'auto',
     customBaseUrl: '',
-    hasDirectVision: false,
+    hasDirectVision: getPhotoCapability({ provider: 'builtin', model: s.builtinModel || 'auto' }).maxImages > 0,
   };
 }
 
@@ -144,13 +151,13 @@ export const api = {
     return { ok: true, ...data };
   },
 
-  async testKey({ provider, apiKey, model, customBaseUrl, signal }) {
+  async testKey({ provider, apiKey, model, customBaseUrl, customTransport, customVision, signal }) {
     try {
       const { text, used } = await generateAiBrowser({
         provider,
         apiKey,
         model,
-        customBaseUrl,
+        customBaseUrl, customTransport, customVision,
         systemPrompt: 'Отвечай одной короткой фразой на русском языке.',
         signal, allowLocalFallback: false,
         messages: [{ role: 'user', content: 'Напиши: ИИ готов помогать с домашкой!' }],
@@ -184,10 +191,11 @@ export const api = {
     imageBase64,
     imagesList,
     ocrText,
+    photoMode = 'auto',
     provider,
     apiKey,
     model,
-    customBaseUrl,
+    customBaseUrl, customTransport, customVision,
     onStatus,
     signal,
   }) {
@@ -197,6 +205,8 @@ export const api = {
     const cleanTask = (taskText || '').trim();
     let cleanOcr = (ocrText || '').trim();
     const allImgs = Array.isArray(imagesList) && imagesList.length > 0 ? imagesList : imageBase64 ? [imageBase64] : [];
+    // Do not derive exact-answer hints or local findings from stale OCR in a native-image request.
+    if (allImgs.length && (photoMode === 'vision' || (photoMode === 'auto' && allImgs.length <= getPhotoCapability({ provider, model, customVision }).maxImages))) cleanOcr = '';
     if (!cleanTask && allImgs.length === 0 && !cleanOcr) {
       return { ok: false, error: 'Напишите задание, надиктуйте голосом или добавьте фотографию.' };
     }
@@ -204,24 +214,6 @@ export const api = {
     onStatus?.({ stage: 'prepare', message: 'Проверяем формулы и готовим запрос по программе ФГОС...' });
 
     try {
-      // If >= 2 photos attached and OCR hasn't been pre-extracted yet, scan all attached pages in order!
-      if (allImgs.length > 1 && !cleanOcr) {
-        const pageTexts = [];
-        for (let i = 0; i < allImgs.length; i += 1) {
-          const rec = await recognizeHomeworkPhoto(allImgs[i], {
-            purpose: 'solve',
-            signal,
-            onProgress: (st) =>
-              onStatus?.({
-                stage: 'vision',
-                message: `Читаем фото ${i + 1} из ${allImgs.length}: ${st?.message || 'сканирование...'}`,
-              }),
-          });
-          if (rec?.text) pageTexts.push(`[Фото ${i + 1}]:\n${rec.text}`);
-        }
-        cleanOcr = pageTexts.join('\n\n');
-      }
-
       checkRequestActive(signal, locked);
       const sympyBadge = tutor ? '' : autoVerifyMathJS(cleanTask || cleanOcr);
       const sysPrompt = buildSystemPrompt(grade, examGoal, subject, effectiveMode, sympyBadge);
@@ -230,15 +222,17 @@ export const api = {
       const {
         text: ansMd,
         used: providerUsed,
-        extractedPhotoText,
+        extractedPhotoText, photoInputUsed = 'none',
       } = await generateAiBrowser({
         provider,
         apiKey,
         model,
-        customBaseUrl,
+        customBaseUrl, customTransport, customVision,
         systemPrompt: sysPrompt,
         messages: [{ role: 'user', content: userPrompt }],
-        imageB64: allImgs.length === 1 ? allImgs[0] : null,
+        imageB64: allImgs[0] || null,
+        images: allImgs,
+        photoMode,
         ocrText: cleanOcr,
         onStatus,
         fallbackMode: tutor ? 'tutor' : 'solve',
@@ -247,7 +241,7 @@ export const api = {
         signal,
       });
 
-      const finalOcr = extractedPhotoText || cleanOcr;
+      const finalOcr = photoInputUsed === 'vision' ? '' : extractedPhotoText || cleanOcr;
       checkRequestActive(signal, locked);
       const recheckedSympy = tutor ? '' : sympyBadge || autoVerifyMathJS(finalOcr);
 
@@ -269,6 +263,8 @@ export const api = {
         task_text: cleanTask || (finalOcr ? finalOcr.slice(0, 180) : 'Задание по фото'),
         image_b64: allImgs[0] || '',
         images_b64: allImgs,
+        photo_mode: photoMode,
+        photo_input_used: photoInputUsed,
         ocr_text: finalOcr,
         response_md: ansMd,
         sympy_badge: recheckedSympy,
@@ -282,6 +278,7 @@ export const api = {
         chatRecord: saved,
         markdown: ansMd,
         extractedPhotoText: finalOcr,
+        photoInputUsed,
         sympyBadge: recheckedSympy,
         providerUsed,
         messages: convMessages,
@@ -305,7 +302,7 @@ export const api = {
     provider,
     apiKey,
     model,
-    customBaseUrl,
+    customBaseUrl, customTransport, customVision,
     onStatus,
     signal,
   }) {
@@ -338,15 +335,17 @@ export const api = {
           : buildSystemPrompt(grade, examGoal, subject, tutor ? 'tutor' : mode);
 
       const nextMsgs = [...(messages || []), { role: 'user', content: promptQ }];
-      const { text: reply, used: providerUsed } = await generateAiBrowser({
+      const { text: reply, used: providerUsed, photoInputUsed } = await generateAiBrowser({
         provider,
         apiKey,
         model,
-        customBaseUrl,
+        customBaseUrl, customTransport, customVision,
         systemPrompt: sysPrompt,
         messages: nextMsgs,
-        // Direct Vision may not return OCR text; keep the photo available on later turns.
-        imageB64: original?.image_b64 && !original.ocr_text ? original.image_b64 : null,
+        // Images remain available to native Vision on every follow-up, not only the first turn.
+        imageB64: original?.image_b64 && (original.photo_input_used === 'vision' || !original.ocr_text) ? original.image_b64 : null,
+        images: original && (original.photo_input_used === 'vision' || !original.ocr_text) ? (original.images_b64?.length ? original.images_b64 : original.image_b64 ? [original.image_b64] : []) : [],
+        photoMode: original?.photo_input_used === 'vision' ? 'vision' : (original?.photo_mode || 'auto'),
         onStatus,
         fallbackMode: tutor ? 'tutor' : itemType === 'check' ? 'check' : 'solve',
         fallbackMeta: { grade, subject },
@@ -360,7 +359,7 @@ export const api = {
           response_md: nextMsgs[1]?.content || reply,
         });
       }
-      return { ok: true, reply, providerUsed, messages: nextMsgs };
+      return { ok: true, reply, providerUsed, photoInputUsed, messages: nextMsgs };
     } catch (e) {
       if (e?.name === 'AbortError') return { ok: false, aborted: true, error: '' };
       return { ok: false, error: e.message };
@@ -376,10 +375,11 @@ export const api = {
     imageBase64,
     imagesList,
     ocrText,
+    photoMode = 'auto',
     provider,
     apiKey,
     model,
-    customBaseUrl,
+    customBaseUrl, customTransport, customVision,
     onStatus,
     signal,
   }) {
@@ -389,6 +389,8 @@ export const api = {
     const cleanDraft = (draftText || '').trim();
     let cleanOcr = (ocrText || '').trim();
     const allImgs = Array.isArray(imagesList) && imagesList.length > 0 ? imagesList : imageBase64 ? [imageBase64] : [];
+    // Do not derive exact-answer hints or local findings from stale OCR in a native-image request.
+    if (allImgs.length && (photoMode === 'vision' || (photoMode === 'auto' && allImgs.length <= getPhotoCapability({ provider, model, customVision }).maxImages))) cleanOcr = '';
 
     if (!cleanDraft && allImgs.length === 0 && !cleanOcr) {
       return {
@@ -412,36 +414,21 @@ export const api = {
     const fullUserMsg = parts.join('\n\n');
 
     try {
-      if (allImgs.length > 1 && !cleanOcr) {
-        const pageTexts = [];
-        for (let i = 0; i < allImgs.length; i += 1) {
-          const rec = await recognizeHomeworkPhoto(allImgs[i], {
-            purpose: 'check',
-            signal,
-            onProgress: (st) =>
-              onStatus?.({
-                stage: 'vision',
-                message: `Читаем страницу тетради ${i + 1} из ${allImgs.length}: ${st?.message || 'сканирование...'}`,
-              }),
-          });
-          if (rec?.text) pageTexts.push(`[Страница ${i + 1}]:\n${rec.text}`);
-        }
-        cleanOcr = pageTexts.join('\n\n');
-      }
-
       const sysPrompt = buildCheckerPrompt(grade, examGoal, checkType);
       const {
         text: ansMd,
         used: providerUsed,
-        extractedPhotoText,
+        extractedPhotoText, photoInputUsed = 'none',
       } = await generateAiBrowser({
         provider,
         apiKey,
         model,
-        customBaseUrl,
+        customBaseUrl, customTransport, customVision,
         systemPrompt: sysPrompt,
         messages: [{ role: 'user', content: fullUserMsg }],
-        imageB64: allImgs.length === 1 ? allImgs[0] : null,
+        imageB64: allImgs[0] || null,
+        images: allImgs,
+        photoMode,
         ocrText: cleanOcr,
         onStatus,
         fallbackMode: 'check',
@@ -456,7 +443,7 @@ export const api = {
       });
 
       checkRequestActive(signal, locked);
-      const finalOcr = extractedPhotoText || cleanOcr;
+      const finalOcr = photoInputUsed === 'vision' ? '' : extractedPhotoText || cleanOcr;
       const finalExpress =
         finalOcr && !cleanDraft
           ? runLocalExpressCheck({
@@ -487,6 +474,8 @@ export const api = {
         draft_text: cleanDraft,
         image_b64: allImgs[0] || '',
         images_b64: allImgs,
+        photo_mode: photoMode,
+        photo_input_used: photoInputUsed,
         ocr_text: finalOcr,
         response_md: ansMd,
         provider_used: providerUsed,
@@ -505,6 +494,7 @@ export const api = {
         markdown: ansMd,
         express: finalExpress,
         extractedPhotoText: finalOcr,
+        photoInputUsed,
         mistakesAdded,
         providerUsed,
         messages: convMessages,
@@ -515,7 +505,7 @@ export const api = {
     }
   },
 
-  async generateQuiz({ grade, subject, topic, provider, apiKey, model, customBaseUrl, onStatus, signal }) {
+  async generateQuiz({ grade, subject, topic, provider, apiKey, model, customBaseUrl, customTransport, customVision, onStatus, signal }) {
     if (isTutorModeEnabled()) return { ...TUTOR_ONLY_ERROR };
     return generatePracticeQuizBrowser({
       grade,
@@ -524,7 +514,7 @@ export const api = {
       provider,
       apiKey,
       model,
-      customBaseUrl,
+      customBaseUrl, customTransport, customVision,
       onStatus,
       signal,
     });
@@ -538,7 +528,7 @@ export const api = {
     provider,
     apiKey,
     model,
-    customBaseUrl,
+    customBaseUrl, customTransport, customVision,
     onStatus,
     signal,
   }) {
@@ -551,7 +541,7 @@ export const api = {
       provider,
       apiKey,
       model,
-      customBaseUrl,
+      customBaseUrl, customTransport, customVision,
       onStatus,
       signal,
     });
@@ -563,7 +553,7 @@ export const api = {
     provider,
     apiKey,
     model,
-    customBaseUrl,
+    customBaseUrl, customTransport, customVision,
     onStatus,
     signal,
   }) {
@@ -574,7 +564,7 @@ export const api = {
       provider,
       apiKey,
       model,
-      customBaseUrl,
+      customBaseUrl, customTransport, customVision,
       onStatus,
       signal,
     });
@@ -626,5 +616,6 @@ export {
   subscribeMistakes,
   fileToDataUri,
   transformImageCanvas,
+  preparePhotoFile,
   runLocalExpressCheck,
 };

@@ -1,8 +1,8 @@
 export const BUILTIN_MODELS = [
   { id: 'auto', name: 'Автовыбор · доступный бесплатный шлюз', description: 'Резервирование между шлюзами. При недоступности сети — локальные инструменты.' },
-  { id: 'qwen-3.5', name: 'Qwen 3.5 Omni', description: 'Только выбранный шлюз Qwen 3.5. При ошибке модель не подменяется.' },
+  { id: 'qwen-3.5', name: 'Qwen 3.5 Omni', description: 'Разбор текста и одного изображения напрямую. При ошибке шлюз не подменяется.' },
   { id: 'pollinations', name: 'Pollinations · облачный маршрутизатор', description: 'Модель выбирает сервис Pollinations. Доступность без ключа зависит от его правил и лимитов.' },
-  { id: 'qwen-2.5-vl', name: 'Qwen 2.5 VL', description: 'Только выбранный шлюз Qwen 2.5. Для фото используется отдельное распознавание.' },
+  { id: 'qwen-2.5-vl', name: 'Qwen 2.5 VL', description: 'Текст и одно изображение напрямую; подходит для несложных задач с фото.' },
 ];
 
 export function getModelLabel(settings) {

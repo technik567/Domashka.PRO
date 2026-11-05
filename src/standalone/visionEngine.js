@@ -1,7 +1,7 @@
 import { raceFirstSuccess } from './network';
 
 /**
- * Photo preprocessing & Multi-Tier Vision / OCR Engine for Domashka.PRO v3.1.
+ * Photo preprocessing and optional OCR (separate from direct multimodal inference).
  * Works in both HTTP Live Preview (via /api/vision-ocr server proxy) AND local file:// standalone mode!
  *
  * v3.1 Reliability & Anti-Hang Upgrades:
@@ -81,6 +81,17 @@ export function fileToDataUri(file) {
   });
 }
 
+/** Load a bounded photo via a temporary blob URL, without retaining the full base64 original. */
+export async function preparePhotoFile(file, options = {}) {
+  if (!file || file.size > 18 * 1024 * 1024) throw new Error('Фото слишком большое (до 18 МБ). Уменьшите снимок или сохраните его как JPG; на телефоне лучше не использовать 48 Мп/ProRAW.');
+  const url = URL.createObjectURL(file);
+  try {
+    return await transformImageCanvas(url, { filterMode: 'original', maxDim: 1650, ...options });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 function dataUriToBlob(dataUri) {
   const parts = dataUri.split(',');
   const mimeMatch = (parts[0] || '').match(/:(.*?);/);
@@ -128,62 +139,67 @@ export async function transformImageCanvas(
   canvas.width = swapAxes ? dh : dw;
   canvas.height = swapAxes ? dw : dh;
 
-  const ctx = canvas.getContext('2d', { willReadFrequently: filterMode !== 'original' });
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  try {
+    const ctx = canvas.getContext('2d', { willReadFrequently: filterMode !== 'original' });
+    if (!ctx) throw new Error('Браузеру не хватило памяти для фото. Уменьшите снимок или откройте сайт в Safari/Chrome.');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  ctx.save();
-  ctx.translate(canvas.width / 2, canvas.height / 2);
-  if (normRot !== 0) {
-    ctx.rotate((normRot * Math.PI) / 180);
-  }
-  ctx.drawImage(img, sx, sy, sw, sh, -dw / 2, -dh / 2, dw, dh);
-  ctx.restore();
-
-  if (filterMode !== 'original') {
-    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const d = imgData.data;
-
-    for (let i = 0; i < d.length; i += 4) {
-      const r = d[i];
-      const g = d[i + 1];
-      const b = d[i + 2];
-
-      if (filterMode === 'remove_grid') {
-        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-        const isLightBlueGrid = b > r + 18 && b > 140 && lum > 122;
-        const isPaleMarginLine = r > b + 32 && r > 170 && lum > 135;
-
-        if (isLightBlueGrid || isPaleMarginLine || lum > 205) {
-          d[i] = 255;
-          d[i + 1] = 255;
-          d[i + 2] = 255;
-        } else {
-          const dark = Math.max(0, Math.min(255, (lum - 52) * 1.48));
-          const out = dark < 145 ? Math.max(0, dark * 0.58) : 255;
-          d[i] = out;
-          d[i + 1] = out;
-          d[i + 2] = out;
-        }
-      } else if (filterMode === 'desk_shadow') {
-        const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-        let v;
-        if (lum > 192) {
-          v = 255;
-        } else if (lum < 75) {
-          v = Math.max(0, Math.round(lum * 0.55));
-        } else {
-          v = Math.max(0, Math.min(255, Math.round((lum - 65) * 1.95)));
-        }
-        d[i] = v;
-        d[i + 1] = v;
-        d[i + 2] = v;
-      }
+    ctx.save();
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    if (normRot !== 0) {
+      ctx.rotate((normRot * Math.PI) / 180);
     }
-    ctx.putImageData(imgData, 0, 0);
-  }
+    ctx.drawImage(img, sx, sy, sw, sh, -dw / 2, -dh / 2, dw, dh);
+    ctx.restore();
 
-  return canvas.toDataURL('image/jpeg', jpegQuality);
+    if (filterMode !== 'original') {
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const d = imgData.data;
+
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i];
+        const g = d[i + 1];
+        const b = d[i + 2];
+
+        if (filterMode === 'remove_grid') {
+          const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+          const isLightBlueGrid = b > r + 18 && b > 140 && lum > 122;
+          const isPaleMarginLine = r > b + 32 && r > 170 && lum > 135;
+
+          if (isLightBlueGrid || isPaleMarginLine || lum > 205) {
+            d[i] = 255;
+            d[i + 1] = 255;
+            d[i + 2] = 255;
+          } else {
+            const dark = Math.max(0, Math.min(255, (lum - 52) * 1.48));
+            const out = dark < 145 ? Math.max(0, dark * 0.58) : 255;
+            d[i] = out;
+            d[i + 1] = out;
+            d[i + 2] = out;
+          }
+        } else if (filterMode === 'desk_shadow') {
+          const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+          let v;
+          if (lum > 192) {
+            v = 255;
+          } else if (lum < 75) {
+            v = Math.max(0, Math.round(lum * 0.55));
+          } else {
+            v = Math.max(0, Math.min(255, Math.round((lum - 65) * 1.95)));
+          }
+          d[i] = v;
+          d[i + 1] = v;
+          d[i + 2] = v;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+
+    const encoded = canvas.toDataURL('image/jpeg', jpegQuality);
+    if (!encoded.startsWith('data:image/')) throw new Error('Не удалось обработать фото: уменьшите снимок.');
+    return encoded;
+  } finally { canvas.width = canvas.height = 0; img.onload = img.onerror = null; img.src = ''; }
 }
 
 /**

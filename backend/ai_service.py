@@ -8,8 +8,9 @@ import zlib
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+from . import ollama_service
 
-# Curated defaults (verified live against OpenRouter & Google AI Studio)
+# Fallback catalog, not a live availability or quota guarantee.
 DEFAULT_OPENROUTER_FREE_MODELS: List[Dict[str, Any]] = [
     {
         "id": "openrouter/free",
@@ -328,6 +329,62 @@ def _normalize_latex_delimiters(text: str) -> str:
     return text
 
 
+def openai_messages(system_prompt: str, messages: List[Dict[str, Any]], photos=None):
+    photos = photos or []
+    result = [{"role": "system", "content": system_prompt}]
+    last_user = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    for i, message in enumerate(messages):
+        content = str(message.get("content", ""))
+        if photos and i == last_user:
+            content = [{"type": "text", "text": content or "Рассмотри изображения и помоги с заданием."}] + [
+                {"type": "image_url", "image_url": {"url": image}} for image in photos
+            ]
+        result.append({"role": message.get("role", "user"), "content": content})
+    return result
+
+
+def photo_capacity(provider: str, model: str, vision_capable=None) -> int:
+    if provider == "gemini":
+        return 4
+    if provider == "openrouter":
+        return 4 if (vision_capable if isinstance(vision_capable, bool) else is_openrouter_vision_model(model)) else 0
+    if provider == "custom":
+        return 4 if vision_capable is True else 0
+    return 1 if provider == "builtin" and (model or "auto") in ("auto", "qwen-3.5", "qwen-2.5-vl") else 0
+
+
+def prepare_photo_input(provider, model, photos, ocr_text="", photo_mode="auto", vision_capable=None, purpose="solve", api_key=""):
+    if not isinstance(photos, list) or len(photos) > 4:
+        raise ValueError("Нужен список не более чем из четырёх фото.")
+    if photo_mode not in ("auto", "vision", "ocr"):
+        raise ValueError("Неизвестный способ обработки фото.")
+    if any(not isinstance(image, str) or not re.fullmatch(r"data:image/(?:png|jpe?g|webp|gif);base64,[A-Za-z0-9+/=\r\n]+", image, re.I) for image in photos):
+        raise ValueError("Некорректное фото. Используйте изображения JPG/PNG/WebP в data URI.")
+    if sum(map(len, photos)) > 20 * 1024 * 1024:
+        raise ValueError("Фото слишком большие (до 20 МБ после кодирования).")
+    capacity = photo_capacity(provider, model, vision_capable)
+    direct = bool(photos) and photo_mode != "ocr" and 0 < len(photos) <= capacity
+    if photos and photo_mode == "vision" and not direct:
+        raise ValueError(f"Выбранная модель принимает непосредственно изображений: {capacity}. Смените модель/число фото или явно выберите OCR; подмены не будет.")
+    if photos and provider == "custom" and photo_mode == "auto" and not direct:
+        raise ValueError("Ollama без Vision: выберите мультимодальную модель или явно разрешите OCR. Автоматической отправки фото в облачный OCR нет.")
+    if direct:
+        return photos, "", ""
+    resolved_ocr = str(ocr_text or "").strip()
+    labels = []
+    if photos and not resolved_ocr:
+        pages = []
+        for index, image in enumerate(photos):
+            text, label = recognize_photo_server(image, purpose=purpose, provider=provider, api_key=api_key, model=model)
+            if not text.strip():
+                raise ValueError(f"Не удалось распознать фото {index + 1}.")
+            pages.append(f"[Фото {index + 1}]:\n{text}" if len(photos) > 1 else text)
+            if label not in labels:
+                labels.append(label)
+        resolved_ocr = "\n\n".join(pages)
+    return [], resolved_ocr, ", ".join(labels)
+
+
 def _call_openrouter(
     api_key: str,
     model: str,
@@ -335,27 +392,8 @@ def _call_openrouter(
     messages: List[Dict[str, Any]],
     image_b64: Optional[str] = None,
 ) -> Tuple[str, str]:
-    or_messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
-    for idx, msg in enumerate(messages):
-        role = msg.get("role", "user")
-        content_text = msg.get("content", "")
-        # Attach image to the latest user message if provided
-        if image_b64 and idx == len(messages) - 1 and role == "user":
-            mime, raw_b64 = _split_data_uri(image_b64)
-            or_messages.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": content_text or "Реши задание на фото подробно по школьным правилам."},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{mime};base64,{raw_b64}"},
-                        },
-                    ],
-                }
-            )
-        else:
-            or_messages.append({"role": role, "content": content_text})
+    photos = image_b64 if isinstance(image_b64, list) else ([image_b64] if image_b64 else [])
+    or_messages = openai_messages(system_prompt, messages, photos)
 
     headers = {
         "Authorization": f"Bearer {api_key.strip()}",
@@ -409,6 +447,7 @@ def _call_gemini(
     messages: List[Dict[str, Any]],
     image_b64: Optional[str] = None,
 ) -> Tuple[str, str]:
+    photos = image_b64 if isinstance(image_b64, list) else ([image_b64] if image_b64 else [])
     contents = []
     for idx, msg in enumerate(messages):
         role = "model" if msg.get("role") == "assistant" else "user"
@@ -416,11 +455,12 @@ def _call_gemini(
         text_val = msg.get("content", "")
         if text_val:
             parts.append({"text": text_val})
-        if image_b64 and idx == len(messages) - 1 and role == "user":
-            mime, raw_b64 = _split_data_uri(image_b64)
+        if photos and idx == max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1):
             if not parts:
-                parts.append({"text": "Внимательно прочитай задание на фотографии (включая рукописный текст, формулы или чертежи) и помоги его выполнить."})
-            parts.append({"inline_data": {"mime_type": mime, "data": raw_b64}})
+                parts.append({"text": "Рассмотри изображения и помоги с заданием."})
+            for image in photos:
+                mime, raw_b64 = _split_data_uri(image)
+                parts.append({"inline_data": {"mime_type": mime, "data": raw_b64}})
         if parts:
             contents.append({"role": role, "parts": parts})
 
@@ -743,6 +783,7 @@ def _call_builtin_free(
     messages: List[Dict[str, Any]],
     has_raw_image_without_ocr: bool = False,
     model: str = "auto",
+    image_b64: Optional[str] = None,
 ) -> Tuple[str, str]:
     """A fixed choice never silently changes model; only auto cascades."""
     selected = model or "auto"
@@ -752,7 +793,7 @@ def _call_builtin_free(
     def qwen35():
         return _call_qwen35_omni_server(
             text_prompt=(messages[-1].get("content", "") if messages else ""),
-            system_prompt=system_prompt, history=messages[:-1], image_b64=None, timeout=20.0,
+            system_prompt=system_prompt, history=messages[:-1], image_b64=image_b64, timeout=20.0,
         )
 
     def pollinations():
@@ -769,8 +810,8 @@ def _call_builtin_free(
         # Crucially keep the tutor policy and conversation, not just the last question.
         conversation = "\n\n".join(f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages)
         return _call_qwen_vl_server(
-            f"Игнорируй пустой фон. Следуй инструкции учителя:\n{system_prompt}\n\n{conversation}",
-            image_b64=None, timeout=16.0,
+            ("Рассмотри само изображение. " if image_b64 else "Игнорируй пустой фон. ") + f"Следуй инструкции учителя:\n{system_prompt}\n\n{conversation}",
+            image_b64=image_b64, timeout=16.0,
         )
 
     gateways = [("qwen-3.5", "Qwen 3.5 Omni", qwen35),
@@ -778,6 +819,8 @@ def _call_builtin_free(
                 ("qwen-2.5-vl", "Qwen 2.5 VL", qwen25)]
     errors = []
     for model_id, label, call in gateways:
+        if image_b64 and model_id == "pollinations":
+            continue
         if selected != "auto" and model_id != selected:
             continue
         try:
@@ -792,87 +835,53 @@ def _call_builtin_free(
 
 
 def generate_ai_response(
-    provider: str,
-    api_key: str,
-    model: str,
-    system_prompt: str,
-    messages: List[Dict[str, Any]],
-    image_b64: Optional[str] = None,
-    ocr_text: str = "",
-    purpose: str = "solve",
-    tutor_only: bool = False,
-    tutor_grade: int = 8,
-    tutor_subject: str = "auto",
-    vision_capable: Optional[bool] = None,
+    provider: str, api_key: str, model: str, system_prompt: str, messages: List[Dict[str, Any]],
+    image_b64: Optional[str] = None, ocr_text: str = "", purpose: str = "solve",
+    tutor_only: bool = False, tutor_grade: int = 8, tutor_subject: str = "auto",
+    vision_capable: Optional[bool] = None, images: Optional[List[str]] = None, photo_mode: str = "auto",
 ) -> Tuple[str, str]:
-    """
-    Unified AI dispatcher supporting:
-      - 'openrouter' (OpenRouter Free models + Vision)
-      - 'gemini' (Google AI Studio Free Tier + Vision)
-      - 'builtin' (Zero-key instant cloud LLM + automatic server-side Vision/OCR)
-    """
-    if provider not in ("builtin", "openrouter", "gemini"):
+    if provider not in ("builtin", "openrouter", "gemini", "custom"):
         raise ValueError("Неизвестный провайдер ИИ")
     if provider in ("openrouter", "gemini") and not (api_key or "").strip():
         raise ValueError("Для выбранного провайдера требуется API-ключ. Выберите режим без ключа или укажите ключ.")
+    if provider == "custom":
+        ollama_service.configured_endpoint()  # opt-in before any OCR / network work
     if tutor_only:
         system_prompt = build_tutor_system_prompt(tutor_grade, tutor_subject)
     messages = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages
-                if m.get("role") in ("user", "assistant")]
+                if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
     if not messages:
         raise ValueError("Сообщение пустое")
-    resolved_ocr = (ocr_text or "").strip()
-    vision_label = ""
-    clean_key = (api_key or "").strip()
-    is_direct_vision = (provider == "gemini" and bool(clean_key)) or (
-        provider == "openrouter" and bool(clean_key) and
-        (vision_capable if isinstance(vision_capable, bool) else is_openrouter_vision_model(model))
-    )
-
-    if image_b64 and not is_direct_vision and not resolved_ocr:
-        resolved_ocr, vision_label = recognize_photo_server(
-            image_b64=image_b64,
-            purpose=purpose,
-            provider=provider,
-            api_key=clean_key,
-            model=model,
-        )
-
+    if tutor_only and len(messages) > 7:
+        messages = [messages[0]] + messages[-6:]
+    photos = images if images is not None else ([image_b64] if image_b64 else [])
+    native_photos, resolved_ocr, vision_label = prepare_photo_input(
+        provider, model, photos, ocr_text, photo_mode, vision_capable, purpose, (api_key or "").strip())
+    if native_photos:
+        system_prompt += "\nРассмотри сами изображения: рисунки, схемы, графики и пространственные связи. Если детали неразборчивы, уточни их, не выдумывай. Соблюдай все правила учебного режима."
     working_msgs = [dict(m) for m in messages]
-    if resolved_ocr and working_msgs:
-        last_txt = working_msgs[-1].get("content", "").strip()
-        if purpose in ("check", "draft_check"):
-            block = (
-                "**Письменная работа / черновик ученика, распознанный с фотографии тетради "
-                "(проверь именно эти записи, вычисления, орфографию и пунктуацию ученика):**\n"
-                f"{resolved_ocr}"
-            )
-            combined = f"{last_txt}\n\n{block}" if last_txt else block
-        else:
-            combined = (
-                f"{last_txt}\n\n[Распознанный с фотографии текст задания]:\n{resolved_ocr}"
-                if last_txt
-                else f"Задание с фотографии (распознанный текст):\n{resolved_ocr}"
-            )
-        working_msgs[-1]["content"] = combined
-
-    if provider == "openrouter" and clean_key:
-        send_img = image_b64
-        if image_b64 and not is_direct_vision:
-            send_img = None
-        ans, used = _call_openrouter(clean_key, model or "openrouter/free", system_prompt, working_msgs, send_img)
-        return ans, (f"{used} + {vision_label}" if vision_label else used)
-
-    if provider == "gemini" and clean_key:
-        ans, used = _call_gemini(clean_key, model or "gemini-2.5-flash", system_prompt, working_msgs, image_b64)
-        return ans, (f"{used} + {vision_label}" if vision_label else used)
-
-    ans, used = _call_builtin_free(system_prompt, working_msgs, has_raw_image_without_ocr=False, model=model)
+    if resolved_ocr:
+        index = max((i for i, m in enumerate(working_msgs) if m["role"] == "user"), default=-1)
+        if index >= 0:
+            working_msgs[index]["content"] += f"\n\n[{'Записи ученика' if purpose == 'check' else 'Задание'}, распознанные с фото — OCR]:\n{resolved_ocr}"
+    # Keep the old single-photo API compatible while supporting multiple images.
+    image_arg = native_photos if len(native_photos) > 1 else (native_photos[0] if native_photos else None)
+    if provider == "openrouter":
+        ans, used = _call_openrouter(api_key.strip(), model or "openrouter/free", system_prompt, working_msgs, image_arg)
+    elif provider == "gemini":
+        ans, used = _call_gemini(api_key.strip(), model or "gemini-2.5-flash", system_prompt, working_msgs, image_arg)
+    elif provider == "custom":
+        ans, used = ollama_service.complete(model, openai_messages(system_prompt, working_msgs, native_photos), tutor_only)
+    else:
+        ans, used = _call_builtin_free(system_prompt, working_msgs, model=model, image_b64=image_arg)
     return ans, (f"{used} + {vision_label}" if vision_label else used)
 
 
 def test_provider_key(provider: str, api_key: str, model: str = "") -> Dict[str, Any]:
     clean_key = (api_key or "").strip()
+    if provider == "custom":
+        txt, used = generate_ai_response("custom", "", model, "Отвечай кратко.", [{"role": "user", "content": "Напиши: ИИ готов."}])
+        return {"ok": True, "message": f"{used}: {txt}"}
     if provider == "builtin":
         txt, used = _call_builtin_free(
             "Отвечай кратко на русском.",

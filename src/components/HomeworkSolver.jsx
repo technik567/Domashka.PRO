@@ -1,3 +1,6 @@
+import BuiltinModelPicker from './BuiltinModelPicker';
+import { getPhotoInputLabel } from '../standalone/photoPayload';
+import { getPhotoCapability } from '../standalone/aiClient';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Sparkles,
@@ -26,8 +29,7 @@ import {
   getActiveAuthPayload,
   saveInputDraft,
   loadInputDraft,
-  fileToDataUri,
-  transformImageCanvas,
+  preparePhotoFile,
 } from '../api';
 import { HELP_MODES, NON_TEXTBOOK_EXAMPLES, SUBJECTS } from '../data/referenceData';
 import MarkdownMath from './MarkdownMath';
@@ -46,6 +48,7 @@ export default function HomeworkSolver({
   profile,
   aiSettings,
   onOpenAiSettings,
+  onChangeAiSettings,
   loadedItem,
   clearLoadedItem,
   prefillTask,
@@ -64,6 +67,10 @@ export default function HomeworkSolver({
   const [imageBase64, setImageBase64] = useState('');
   const [imagesList, setImagesList] = useState([]);
   const [ocrText, setOcrText] = useState('');
+  const [attachmentBusy, setAttachmentBusy] = useState(false);
+  const [pasteBusy, setPasteBusy] = useState(false);
+  const pasteVersion = useRef(0);
+  const [photoMode, setPhotoMode] = useState(initialDraft.photoMode || 'auto');
 
   const [solving, setSolving] = useState(false);
   const [aiStatus, setAiStatus] = useState(null);
@@ -104,10 +111,13 @@ export default function HomeworkSolver({
   const relevantExamples = NON_TEXTBOOK_EXAMPLES.filter((e) => e.band === gradeBand);
   const authInfo = getActiveAuthPayload(aiSettings);
 
+  useEffect(() => { pasteVersion.current++; setPasteBusy(false); }, [imagesList]);
+  useEffect(() => () => { pasteVersion.current++; }, []);
+
   // Auto-save unsent draft locally whenever student types
   useEffect(() => {
-    saveInputDraft(tutorOnly ? 'tutor' : 'solver', { subject, mode, taskText });
-  }, [subject, mode, taskText]);
+    saveInputDraft(tutorOnly ? 'tutor' : 'solver', { subject, mode, taskText, photoMode });
+  }, [subject, mode, taskText, photoMode]);
 
   // Sync default paper style when subject changes
   useEffect(() => {
@@ -121,6 +131,7 @@ export default function HomeworkSolver({
   useEffect(() => {
     if (!resetSignal) return;
     handleCancelRequest();
+    pasteVersion.current++; setPasteBusy(false);
     setTaskText('');
     setImageBase64('');
     setImagesList([]);
@@ -134,17 +145,20 @@ export default function HomeworkSolver({
   useEffect(() => {
     if (loadedItem && loadedItem.item_type !== 'check' && (!tutorOnly || loadedItem.tutor_only)) {
       handleCancelRequest();
+      pasteVersion.current++; setPasteBusy(false);
       setSubject(loadedItem.subject || 'auto');
       setMode(loadedItem.mode || 'notebook');
       setTaskText(loadedItem.task_text || '');
       setImageBase64(loadedItem.image_b64 || '');
       setImagesList(loadedItem.images_b64?.length ? loadedItem.images_b64 : loadedItem.image_b64 ? [loadedItem.image_b64] : []);
       setOcrText(loadedItem.ocr_text || '');
+      setPhotoMode(loadedItem.photo_mode || 'auto');
       setResult({
         id: loadedItem.id,
         markdown: loadedItem.response_md || '',
         sympyBadge: tutorOnly ? '' : loadedItem.sympy_badge || '',
         providerUsed: loadedItem.provider_used || '',
+        photoInputUsed: loadedItem.photo_input_used || 'none',
         messages: Array.isArray(loadedItem.messages) ? loadedItem.messages : [],
       });
       setError('');
@@ -168,6 +182,7 @@ export default function HomeworkSolver({
   }, [prefillTask]);
 
   const handlePasteClipboard = async (e) => {
+    if (abortRef.current || attachmentBusy || pasteBusy) return;
     const items = e.clipboardData?.items;
     if (!items) return;
     for (const item of items) {
@@ -175,8 +190,13 @@ export default function HomeworkSolver({
         e.preventDefault();
         const file = item.getAsFile();
         if (file) {
-          const uri = await fileToDataUri(file);
-          const clean = await transformImageCanvas(uri, { filterMode: 'original', maxDim: 1650 });
+          const operation = ++pasteVersion.current;
+          setPasteBusy(true);
+          let clean;
+          try { clean = await preparePhotoFile(file); }
+          catch (error) { if (operation === pasteVersion.current) setError(error.message); return; }
+          finally { if (operation === pasteVersion.current) setPasteBusy(false); }
+          if (operation !== pasteVersion.current) return;
           setOcrText('');
           setImageBase64(clean);
           setImagesList([clean]);
@@ -204,6 +224,7 @@ export default function HomeworkSolver({
 
   const handleSolve = async (e) => {
     e?.preventDefault?.();
+    if (attachmentBusy || pasteBusy) return;
     if (abortRef.current) return;
     setError('');
     if (!taskText.trim() && !imageBase64 && imagesList.length === 0 && !ocrText.trim()) {
@@ -228,6 +249,7 @@ export default function HomeworkSolver({
       imageBase64,
       imagesList,
       ocrText,
+      photoMode,
       ...authInfo,
       signal: ctrl.signal,
       onStatus: (st) => setAiStatus(st),
@@ -253,6 +275,7 @@ export default function HomeworkSolver({
       markdown: res.markdown,
       sympyBadge: res.sympyBadge,
       providerUsed: res.providerUsed,
+      photoInputUsed: res.photoInputUsed,
       messages: res.messages,
     });
     onActiveChatChange?.(res.id);
@@ -491,6 +514,8 @@ export default function HomeworkSolver({
           </div>
         </div>
 
+        <div className="px-4 sm:px-6 pb-4 pt-3"><BuiltinModelPicker settings={aiSettings} onChange={onChangeAiSettings} disabled={solving || chatLoading} tutorOnly={tutorOnly} onOpenSettings={onOpenAiSettings} /></div>
+
         {/* STEP 2: Task Input + Voice + Photo Scanner */}
         <div className="p-4 sm:p-6 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -504,6 +529,7 @@ export default function HomeworkSolver({
             </div>
 
             <VoiceMicButton
+              disabled={solving || chatLoading}
               onTranscript={(spoken) =>
                 setTaskText((prev) => (prev ? `${prev} ${spoken}` : spoken))
               }
@@ -584,7 +610,11 @@ export default function HomeworkSolver({
           </div>
 
           {/* Upgraded Smart Photo Scanner 3.2 (Multi-Photo + Photo-Delete Text Strip + .docx/.pdf/.txt Import) */}
+          {pasteBusy && <p role="status" className="text-xs text-indigo-600 dark:text-indigo-300">Готовим фото из буфера…</p>}
           <PhotoScannerBox
+            onBusyChange={setAttachmentBusy}
+            photoMode={photoMode} onChangePhotoMode={setPhotoMode}
+            localProvider={authInfo.provider === 'custom'} maxVisionImages={getPhotoCapability(authInfo).maxImages} busy={solving || chatLoading || pasteBusy}
             imageBase64={imageBase64}
             imagesList={imagesList}
             onChangeImage={setImageBase64}
@@ -616,7 +646,7 @@ export default function HomeworkSolver({
 
             <button
               type="submit"
-              disabled={solving}
+              disabled={solving || attachmentBusy || pasteBusy}
               className="w-full sm:w-auto px-7 py-3.5 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 hover:from-blue-700 hover:to-violet-700 disabled:opacity-55 text-white font-extrabold text-sm shadow-lg shadow-indigo-600/20 inline-flex items-center justify-center gap-2 transition transform active:scale-[0.99]"
             >
               <Sparkles className="w-4 h-4 text-amber-300" />
@@ -655,6 +685,7 @@ export default function HomeworkSolver({
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
                 Сохранено в чатах ({profile.grade} кл.)
               </span>
+              {getPhotoInputLabel(result.photoInputUsed) && <span className="text-[11px] rounded-full bg-sky-50 dark:bg-sky-950/50 text-sky-800 dark:text-sky-300 px-2.5 py-1">{getPhotoInputLabel(result.photoInputUsed)}</span>}
               {result.providerUsed && (
                 <span className="text-[11px] text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 px-2.5 py-1 rounded-full">
                   {result.providerUsed}

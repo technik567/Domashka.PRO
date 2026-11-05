@@ -196,6 +196,8 @@ export const chatStore = {
     mode = 'notebook',
     tutor_only = false,
     images_b64 = [],
+    photo_mode = 'auto',
+    photo_input_used = 'none',
     title = '',
     task_text = '',
     condition_text = '',
@@ -226,6 +228,8 @@ export const chatStore = {
       subject,
       mode,
       tutor_only: Boolean(tutor_only),
+      photo_mode: ['auto', 'vision', 'ocr'].includes(photo_mode) ? photo_mode : 'auto',
+      photo_input_used: ['vision', 'ocr', 'none'].includes(photo_input_used) ? photo_input_used : 'none',
       images_b64: images_b64.length ? images_b64.slice(0, 4) : image_b64 ? [image_b64] : [],
       title: autoTitle,
       task_text: (task_text || '').trim() || autoTitle,
@@ -349,6 +353,8 @@ export const chatStore = {
       if (item && (typeof item.id === 'string' || (typeof item.id === 'number' && Number.isFinite(item.id))) &&
           typeof item.response_md === 'string' && item.response_md && !seen.has(item.id)) {
         item.tutor_only = false;
+        item.photo_mode = ['auto', 'vision', 'ocr'].includes(item.photo_mode) ? item.photo_mode : 'auto';
+        item.photo_input_used = ['vision', 'ocr', 'none'].includes(item.photo_input_used) ? item.photo_input_used : 'none';
         for (const field of ['title', 'task_text', 'subject', 'mode']) item[field] = String(item[field] || '');
         item.messages = Array.isArray(item.messages) ? item.messages.filter((m) => m && ['user', 'assistant'].includes(m.role) && typeof m.content === 'string') : [];
         item.images_b64 = Array.isArray(item.images_b64) ? item.images_b64.filter((uri) => typeof uri === 'string').slice(0, 4) : [];
