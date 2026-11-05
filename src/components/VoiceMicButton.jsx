@@ -1,90 +1,109 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Mic, MicOff } from 'lucide-react';
+import { getBrowserEnvironment, VOICE_FALLBACK_HELP } from '../standalone/browserEnvironment';
 
-export default function VoiceMicButton({ onTranscript, className = '' }) {
-  const [listening, setListening] = useState(false);
+const ERRORS = {
+  'not-allowed': 'Доступ к микрофону/распознаванию запрещён. Проверьте разрешение сайта и настройки речи в iOS.',
+  'service-not-allowed': 'Браузер или HTML Viewer не разрешает сервис распознавания речи.',
+  'audio-capture': 'Микрофон недоступен: проверьте разрешение и не занят ли он другим приложением.',
+  'no-speech': 'Речь не услышана. Попробуйте ещё раз или используйте диктовку клавиатуры.',
+  network: 'Сервис распознавания речи недоступен по сети. Это отдельный сервис браузера, не выбранная нейросеть.',
+  'language-not-supported': 'Распознавание русского языка недоступно в этом браузере.',
+};
+
+export default function VoiceMicButton({ onTranscript, className = '', disabled = false }) {
+  const [state, setState] = useState('idle');
   const [hint, setHint] = useState('');
-  const recRef = useRef(null);
+  const [interim, setInterim] = useState('');
+  const recognition = useRef(null);
+  const onTranscriptRef = useRef(onTranscript);
+  const startTimer = useRef(null);
+  const stopping = useRef(false);
+  onTranscriptRef.current = onTranscript;
 
-  const showTempHint = (msg) => {
-    setHint(msg);
-    setTimeout(() => setHint(''), 4500);
+  const stop = () => {
+    const current = recognition.current;
+    stopping.current = false;
+    recognition.current = null; // invalidate callbacks BEFORE abort (some implementations fire synchronously)
+    clearTimeout(startTimer.current);
+    if (current) { current.onstart = current.onresult = current.onerror = current.onend = null; try { current.abort(); } catch { /* already stopped */ } }
   };
 
-  const toggleListen = () => {
-    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRec) {
-      showTempHint('Голосовой ввод поддерживается в браузерах Chrome, Edge и Яндекс (по HTTP/HTTPS).');
+  useEffect(() => {
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') { stop(); setState('idle'); setInterim(''); }
+    };
+    document.addEventListener('visibilitychange', onHidden);
+    return () => { stop(); document.removeEventListener('visibilitychange', onHidden); };
+  }, []);
+  useEffect(() => { if (disabled) { stop(); setState('idle'); setInterim(''); } }, [disabled]);
+
+  const toggle = () => {
+    if (recognition.current) {
+      const current = recognition.current;
+      stopping.current = true; setState('stopping'); clearTimeout(startTimer.current);
+      startTimer.current = setTimeout(() => {
+        if (recognition.current === current) { stop(); setState('idle'); setInterim(''); setHint('Браузер не подтвердил конец записи. ' + VOICE_FALLBACK_HELP); }
+      }, 3000);
+      try { current.stop(); } catch { stop(); setState('idle'); setInterim(''); }
       return;
     }
-
-    if (listening && recRef.current) {
-      recRef.current.stop();
-      setListening(false);
+    const environment = getBrowserEnvironment();
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (environment.unsafeNativeMedia || !environment.secure || !SpeechRecognition) {
+      setHint((environment.unsafeNativeMedia ? 'В локальном iOS-просмотрщике прямой вызов микрофона отключён: он может быть недоступен или завершить приложение. ' : 'Этот браузер/способ запуска не поддерживает безопасный голосовой ввод кнопкой сайта. ') + VOICE_FALLBACK_HELP);
       return;
     }
-
+    let current;
     try {
-      const rec = new SpeechRec();
-      rec.lang = 'ru-RU';
-      rec.interimResults = false;
-      rec.maxAlternatives = 1;
-      rec.onresult = (ev) => {
-        const text = ev?.results?.[0]?.[0]?.transcript || '';
-        if (text.trim()) {
-          onTranscript?.(text.trim());
-          setHint('');
+      current = new SpeechRecognition();
+      recognition.current = current; stopping.current = false;
+      current.lang = 'ru-RU';
+      current.interimResults = true;
+      current.continuous = false; // compatible with short mobile dictation; no background auto-restart
+      current.maxAlternatives = 1;
+      current.onstart = () => { if (recognition.current === current && !stopping.current) { clearTimeout(startTimer.current); setState('listening'); } };
+      const deliveredFinals = new Set();
+      current.onresult = (event) => {
+        if (recognition.current !== current) return;
+        let pending = '';
+        const completed = [];
+        for (let i = event.resultIndex || 0; i < event.results.length; i += 1) {
+          const text = event.results[i]?.[0]?.transcript || '';
+          if (event.results[i].isFinal) { if (!deliveredFinals.has(i)) { deliveredFinals.add(i); completed.push(text); } }
+          else pending += text;
         }
+        if (completed.join(' ').trim()) onTranscriptRef.current?.(completed.join(' ').trim());
+        setInterim(pending.slice(0, 1000));
       };
-      rec.onerror = (ev) => {
-        setListening(false);
-        if (ev?.error === 'not-allowed' || ev?.error === 'service-not-allowed') {
-          if (window.location.protocol === 'file:') {
-            showTempHint(
-              'Браузер отключает микрофон для локальных файлов file:// в целях безопасности. Введите текст или вставьте фото (Ctrl+V).'
-            );
-          } else {
-            showTempHint('Разрешите доступ к микрофону в адресной строке браузера.');
-          }
-        } else if (ev?.error === 'no-speech') {
-          showTempHint('Речь не услышана. Попробуйте сказать громче.');
-        }
+      current.onerror = (event) => {
+        if (recognition.current !== current) return;
+        const message = event.error === 'aborted' ? '' : (ERRORS[event.error] || 'Не удалось распознать речь. Попробуйте диктовку клавиатуры.');
+        stop(); setState('idle'); setInterim('');
+        if (message) setHint(message + ' ' + VOICE_FALLBACK_HELP);
       };
-      rec.onend = () => setListening(false);
-      recRef.current = rec;
-      setHint('');
-      setListening(true);
-      rec.start();
+      current.onend = () => {
+        if (recognition.current !== current) return;
+        recognition.current = null; stopping.current = false; current.onstart = current.onresult = current.onerror = current.onend = null; clearTimeout(startTimer.current); setState('idle'); setInterim('');
+      };
+      setHint(''); setInterim(''); setState('starting');
+      startTimer.current = setTimeout(() => {
+        if (recognition.current === current) { stop(); setState('idle'); setHint('Браузер не запустил распознавание. Проверьте разрешения. ' + VOICE_FALLBACK_HELP); }
+      }, 15000);
+      current.start();
     } catch {
-      setListening(false);
-      showTempHint('Не удалось запустить микрофон в этом режиме.');
+      stop(); setState('idle'); setHint('Не удалось запустить распознавание речи. ' + VOICE_FALLBACK_HELP);
     }
   };
 
-  return (
-    <div className="inline-flex flex-col items-end gap-1">
-      <button
-        type="button"
-        onClick={toggleListen}
-        title="Надиктовать текст голосом"
-        className={`inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl border transition ${
-          listening
-            ? 'bg-rose-600 text-white border-rose-600 animate-pulse shadow-sm'
-            : 'bg-slate-50 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700'
-        } ${className}`}
-      >
-        {listening ? (
-          <MicOff className="w-3.5 h-3.5" />
-        ) : (
-          <Mic className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-        )}
-        {listening ? 'Слушаю... (стоп)' : 'Голосом'}
-      </button>
-      {hint && (
-        <span className="text-[11px] font-medium text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/70 border border-amber-200 dark:border-amber-800 px-2.5 py-1 rounded-lg max-w-xs text-right">
-          {hint}
-        </span>
-      )}
-    </div>
-  );
+  return <div className="inline-flex flex-col items-end gap-1 max-w-full">
+    <button type="button" disabled={disabled || state === 'stopping'} onClick={toggle} aria-pressed={state !== 'idle'} title="Надиктовать текст голосом"
+      className={`inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-xl border transition disabled:opacity-50 ${state !== 'idle' ? 'bg-rose-600 text-white border-rose-600' : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700'} ${className}`}>
+      {state !== 'idle' ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />}
+      {state === 'stopping' ? 'Завершаю…' : state === 'starting' ? 'Запуск… (стоп)' : state === 'listening' ? 'Слушаю… (стоп)' : 'Голосом'}
+    </button>
+    {interim && <span role="status" className="text-xs text-indigo-700 dark:text-indigo-300 max-w-sm break-words">{interim}</span>}
+    {hint && <span role="status" className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/70 border border-amber-200 dark:border-amber-800 p-2.5 rounded-lg max-w-sm">{hint}</span>}
+    {state !== 'idle' && <span className="text-[10px] text-slate-500 max-w-xs">Речь обрабатывает сервис браузера/ОС; может потребоваться интернет. Текст не отправляется в чат автоматически.</span>}
+  </div>;
 }

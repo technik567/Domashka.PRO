@@ -1,3 +1,6 @@
+import { normalizeCustomEndpoint, describeCustomNetworkError, isLoopbackHost } from './customConnection';
+import { getBrowserEnvironment } from './browserEnvironment';
+import { normalizePhotos, choosePhotoPlan, withOpenAiImages } from './photoPayload';
 import {
   solveAlgebraJS,
   solveFractionsJS,
@@ -99,7 +102,7 @@ export async function fetchFreeModelsBrowser(force = false) {
       if (!free) continue;
       const arch = m.architecture || {};
       const vision = (arch.input_modalities || []).includes('image') || String(arch.modality || '').includes('image');
-      list.push({ id, name: m.name || id, vision, badge: vision ? 'Текст + Фото' : 'Только текст' });
+      list.push({ id, name: m.name || id, description: String(m.description || '').slice(0, 350), vision, badge: vision ? 'Текст + Фото' : 'Только текст' });
       seen.add(id);
     }
     cachedOrModels = [list[0], ...list.slice(1).sort((a, b) => Number(b.vision) - Number(a.vision) || a.name.localeCompare(b.name))];
@@ -224,71 +227,28 @@ function blankPngBlob() {
 }
 
 async function callServerProxyAi({
-  provider,
-  apiKey,
-  model,
-  systemPrompt,
-  messages,
-  imageB64,
-  ocrText,
-  purpose,
-  tutorOnly = false,
-  tutorGrade = 8,
-  tutorSubject = 'auto',
-  signal,
+  provider, apiKey, model, systemPrompt, messages, images = [], ocrText, purpose,
+  photoMode = 'auto', customVision = false, tutorOnly = false, tutorGrade = 8, tutorSubject = 'auto', signal,
 }) {
-  const res = await fetchWithTimeout(
-    '/api/ai-generate',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider: provider || 'builtin',
-        apiKey: apiKey || '',
-        model: model || '',
-        systemPrompt,
-        messages,
-        imageBase64: imageB64 || null,
-        ocrText: ocrText || '',
-        purpose: purpose || 'solve',
-        tutorOnly, tutorGrade, tutorSubject,
-        supportsVision: provider === 'gemini' || (provider === 'openrouter' && isKnownOpenRouterVisionModel(model)),
-      }),
-    },
-    26000,
-    signal
-  );
-  if (!res.ok) throw new Error(`Server HTTP ${res.status}`);
-  const data = await res.json();
-  if (!data?.ok || !String(data.text || '').trim()) {
-    throw new Error(data?.error || 'Пустой ответ серверного шлюза');
-  }
-  return {
-    text: normalizeLatex(data.text),
-    used: data.used || 'Облачный ИИ-шлюз Домашка.ПРО',
-    extractedPhotoText: data.extractedPhotoText || ocrText || '',
-    visionEngineLabel: data.visionEngineLabel || '',
-  };
+  const res = await fetchWithTimeout('/api/ai-generate', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider, apiKey: provider === 'custom' ? '' : apiKey || '', model: model || '', systemPrompt, messages,
+      images, imageBase64: images[0] || null, ocrText: ocrText || '', purpose: purpose || 'solve', photoMode,
+      tutorOnly, tutorGrade, tutorSubject,
+      supportsVision: getPhotoCapability({ provider, model, customVision }).maxImages > 0,
+    }),
+  }, provider === 'custom' ? 135000 : 30000, signal);
+  let data;
+  try { data = await res.json(); } catch { throw new Error('Python API недоступен по этому адресу. Статический хостинг/GitHub Pages не запускает сервер Ollama.'); }
+  if (!res.ok || !data?.ok || !String(data.text || '').trim()) throw new Error(data?.error || `Сервер ИИ: HTTP ${res.status}, пустой ответ.`);
+  return { text: normalizeLatex(data.text), used: data.used || 'ИИ через Python-сервер',
+    extractedPhotoText: data.extractedPhotoText || ocrText || '', visionEngineLabel: data.visionEngineLabel || '' };
 }
 
 async function callOpenRouterBrowser(apiKey, model, systemPrompt, messages, imageB64, onStatus, signal) {
   onStatus?.({ stage: 'cloud', message: 'Отправляем запрос в OpenRouter AI...' });
-  const orMsgs = [{ role: 'system', content: systemPrompt }];
-  messages.forEach((m, idx) => {
-    const isLastUser = imageB64 && idx === messages.length - 1 && m.role === 'user';
-    if (isLastUser) {
-      const { mime, b64 } = splitDataUri(imageB64);
-      orMsgs.push({
-        role: 'user',
-        content: [
-          { type: 'text', text: m.content || 'Внимательно прочитай фото и выполни задание по школьным правилам.' },
-          { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } },
-        ],
-      });
-    } else {
-      orMsgs.push({ role: m.role, content: m.content });
-    }
-  });
+  const orMsgs = [{ role: 'system', content: systemPrompt }, ...withOpenAiImages(messages, imageB64 || [])];
 
   const candidates = [model || 'openrouter/free'];
 
@@ -343,10 +303,12 @@ async function callGeminiBrowser(apiKey, model, systemPrompt, messages, imageB64
     const role = m.role === 'assistant' ? 'model' : 'user';
     const parts = [];
     if (m.content) parts.push({ text: m.content });
-    if (imageB64 && idx === messages.length - 1 && role === 'user') {
-      const { mime, b64 } = splitDataUri(imageB64);
-      if (!parts.length) parts.push({ text: 'Внимательно прочитай задание на фото и выполни по школьным правилам.' });
-      parts.push({ inline_data: { mime_type: mime, data: b64 } });
+    if (imageB64?.length && idx === messages.map((m) => m.role).lastIndexOf('user')) {
+      if (!parts.length) parts.push({ text: 'Рассмотри изображения и помоги с заданием.' });
+      for (const image of imageB64) {
+        const { mime, b64 } = splitDataUri(image);
+        parts.push({ inline_data: { mime_type: mime, data: b64 } });
+      }
     }
     return { role, parts };
   });
@@ -402,41 +364,49 @@ async function callGeminiBrowser(apiKey, model, systemPrompt, messages, imageB64
   throw new Error(`Ошибка соединения с Google Gemini (${lastErr}). Проверьте интернет.`);
 }
 
-async function callCustomLocalBrowser(baseUrl, apiKey, model, systemPrompt, messages, onStatus, signal) {
-  onStatus?.({ stage: 'cloud', message: `Обращаемся к локальной модели ${model || 'Ollama'}...` });
-  const cleanUrl = (baseUrl || 'http://localhost:11434/v1').replace(/\/+$/, '');
-  const endpoint = cleanUrl.endsWith('/chat/completions') ? cleanUrl : `${cleanUrl}/chat/completions`;
-  const headers = { 'Content-Type': 'application/json' };
-  if (apiKey && apiKey.trim()) headers.Authorization = `Bearer ${apiKey.trim()}`;
-
-  const res = await fetchWithTimeout(
-    endpoint,
-    {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model: model || 'qwen2.5:7b',
-        messages: [{ role: 'system', content: systemPrompt }, ...messages],
-        temperature: 0.35,
-      }),
-    },
-    20000,
-    signal
-  );
-  if (!res.ok) {
-    throw new Error(
-      `Локальный сервер ИИ ответил кодом ${res.status}. Убедитесь, что Ollama / LM Studio запущена с разрешённым CORS.`
-    );
+async function callCustomLocalBrowser(baseUrl, apiKey, model, systemPrompt, messages, images, onStatus, signal) {
+  const endpoint = normalizeCustomEndpoint(baseUrl);
+  const environment = getBrowserEnvironment();
+  const url = new URL(endpoint);
+  if (environment.protocol === 'https:' && url.protocol === 'http:' && !isLoopbackHost(url.hostname)) {
+    throw new Error('HTTPS-сайт не может надёжно обращаться к HTTP API в локальной сети. Используйте HTTPS API либо режим «Через Python-сервер» на своём сайте; отключать защиту браузера не нужно.');
   }
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content || '';
-  return { text: normalizeLatex(content), used: `Локальный ИИ (${model || 'Ollama'})` };
+  onStatus?.({ stage: 'cloud', message: `Подключаемся к ${model || 'Ollama'}. Первая загрузка модели может занять до двух минут…` });
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiKey?.trim()) headers.Authorization = `Bearer ${apiKey.trim()}`;
+  let res;
+  try {
+    res = await fetchWithTimeout(endpoint, { method: 'POST', headers, body: JSON.stringify({
+      model: model || 'qwen2.5:7b', stream: false,
+      messages: [{ role: 'system', content: systemPrompt }, ...withOpenAiImages(messages, images)],
+      temperature: 0.35, max_tokens: systemPrompt.includes('ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА РЕПЕТИТОРА') ? 900 : 4000,
+    }) }, 120000, signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    throw new Error(describeCustomNetworkError(error, baseUrl, environment));
+  }
+  if (!res.ok) {
+    if (res.status === 404) throw new Error('Ollama/API: HTTP 404. Проверьте адрес /v1/chat/completions и точное имя установленной модели (ollama list / ollama pull).');
+    if (res.status === 401 || res.status === 403) throw new Error(`Ollama/API: HTTP ${res.status}. Проверьте ключ, права и OLLAMA_ORIGINS для origin этого сайта.`);
+    throw new Error(`Ollama/API: HTTP ${res.status}. ${images.length ? 'Проверьте, поддерживает ли выбранная модель изображения и OpenAI-формат image_url.' : 'Проверьте журнал сервера, доступную память и установленную модель.'}`);
+  }
+  let data;
+  try { data = await res.json(); } catch { throw new Error('API вернул не JSON. Нужен OpenAI-совместимый endpoint /v1/chat/completions, а не страница сайта.'); }
+  const content = data?.choices?.[0]?.message?.content;
+  if (typeof content !== 'string' || !content.trim()) throw new Error('API ответил, но текст ответа отсутствует. Проверьте модель и OpenAI-совместимый формат сервера.');
+  return { text: normalizeLatex(content), used: `Ollama / свой API (${model || 'Ollama'})` };
+}
+
+function photoBlob(dataUri) {
+  const { mime, b64 } = splitDataUri(dataUri);
+  const bytes = Uint8Array.from(atob(b64), (character) => character.charCodeAt(0));
+  return new Blob([bytes], { type: mime });
 }
 
 /**
  * Gateway 0: Official Qwen3.5-Omni Cloud API on non-Cloudflare AWS (~4-7s, unlimited, zero 45s limit!)
  */
-async function callQwen35OmniGateway(systemPrompt, messages, signal) {
+async function callQwen35OmniGateway(systemPrompt, messages, signal, imageB64 = null) {
   const { signal: linkedSignal, cleanup } = linkAbortSignals(signal, 19000);
   const spaceHost = 'https://qwen-qwen3-5-omni-offline-demo.hf.space';
   try {
@@ -446,11 +416,22 @@ async function callQwen35OmniGateway(systemPrompt, messages, signal) {
     }));
     const lastPrompt = String(messages[messages.length - 1]?.content || 'Помоги выполнить задание.');
 
+    let imageDescriptor = null;
+    if (imageB64) {
+      const form = new FormData();
+      const blob = photoBlob(imageB64);
+      form.append('files', blob, blob.type === 'image/png' ? 'homework.png' : 'homework.jpg');
+      const upload = await fetch(`${spaceHost}/gradio_api/upload`, { method: 'POST', body: form, signal: linkedSignal });
+      if (!upload.ok) throw new Error(`Qwen3.5 upload HTTP ${upload.status}`);
+      const paths = await upload.json();
+      if (!paths?.[0]) throw new Error('Нет пути загруженного фото Qwen3.5');
+      imageDescriptor = { path: paths[0], meta: { _type: 'gradio.FileData' } };
+    }
     const callResp = await fetch(`${spaceHost}/gradio_api/call/chat_predict`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        data: [lastPrompt, null, null, null, priorHistory, systemPrompt || '', 0.35, 0.85, 20],
+        data: [lastPrompt, null, imageDescriptor, null, priorHistory, systemPrompt || '', 0.35, 0.85, 20],
       }),
       signal: linkedSignal,
     });
@@ -524,16 +505,13 @@ async function callPollinationsGateway(systemPrompt, messages, signal) {
  * Gateway B: Non-Cloudflare AWS Qwen2.5-VL-7B-Instruct (/qwen_vl_inference, 17s strict timeout).
  * Bypasses Cloudflare 16KB throttling on Russian ISPs completely!
  */
-async function callQwenAwsGateway(systemPrompt, messages, signal, delayMs = 0) {
-  if (delayMs > 0) {
-    await abortableDelay(delayMs, signal);
-    throwIfUserAborted(signal);
-  }
+async function callQwenAwsGateway(systemPrompt, messages, signal, imageB64 = null) {
   const { signal: linkedSignal, cleanup } = linkAbortSignals(signal, 17500);
   const spaceHost = 'https://developer0hye-qwen2-5-vl-7b-instruct.hf.space';
   try {
     const form = new FormData();
-    form.append('files', blankPngBlob(), 'blank.png');
+    const blob = imageB64 ? photoBlob(imageB64) : blankPngBlob();
+    form.append('files', blob, blob.type === 'image/png' ? 'homework.png' : 'homework.jpg');
     const upResp = await fetch(`${spaceHost}/gradio_api/upload`, {
       method: 'POST',
       body: form,
@@ -549,7 +527,7 @@ async function callQwenAwsGateway(systemPrompt, messages, signal, delayMs = 0) {
       .map((m) => `${m.role === 'assistant' ? 'Учитель' : 'Ученик'}: ${m.content || ''}`)
       .join('\n\n');
     const combinedPrompt =
-      `Игнорируй пустой белый фон и ответь на задание ученика строго по инструкции.\n\n` +
+      (imageB64 ? 'Рассмотри само изображение, включая схемы и рисунки.\n\n' : 'Игнорируй пустой белый фон.\n\n') +
       `[Инструкция школьного учителя]:\n${systemPrompt}\n\n${convo}`;
 
     const callResp = await fetch(`${spaceHost}/gradio_api/call/qwen_vl_inference`, {
@@ -599,7 +577,7 @@ async function callQwenAwsGateway(systemPrompt, messages, signal, delayMs = 0) {
  */
 async function callBuiltinFreeBrowser(
   systemPrompt, messages, onStatus, fallbackMode = 'solve', fallbackMeta = {}, signal,
-  model = 'auto', allowLocalFallback = true
+  model = 'auto', allowLocalFallback = true, imageB64 = null
 ) {
   throwIfUserAborted(signal);
   const selected = model || 'auto';
@@ -611,7 +589,7 @@ async function callBuiltinFreeBrowser(
   };
   onStatus?.({ stage: 'thinking', message: fallbackMode === 'tutor' ? 'Репетитор готовит одну подсказку...' : 'Выбранная нейросеть разбирает задание...' });
   if (selected !== 'auto') {
-    try { return await gateways[selected](systemPrompt, messages, signal); }
+    try { return await gateways[selected](systemPrompt, messages, signal, imageB64); }
     catch (error) {
       throwIfUserAborted(signal);
       throw new Error(`Модель ${BUILTIN_MODELS.find((m) => m.id === selected).name} недоступна. Попробуйте позже или выберите другую модель. (${error.message})`);
@@ -623,20 +601,19 @@ async function callBuiltinFreeBrowser(
   signal?.addEventListener('abort', onParentAbort, { once: true });
   const delayed = async (fn, delay) => {
     await abortableDelay(delay, raceController.signal);
-    return fn(systemPrompt, messages, raceController.signal);
+    return fn(systemPrompt, messages, raceController.signal, imageB64);
   };
   try {
-    return await Promise.any([
-      delayed(callQwen35OmniGateway, 0),
-      delayed(callPollinationsGateway, 1200),
-      delayed(callQwenAwsGateway, 2500),
-    ]);
+    const tasks = [delayed(callQwen35OmniGateway, 0), delayed(callQwenAwsGateway, imageB64 ? 1200 : 2500)];
+    if (!imageB64) tasks.push(delayed(callPollinationsGateway, 1200));
+    return await Promise.any(tasks);
   } catch {
     throwIfUserAborted(signal);
   } finally {
     raceController.abort();
     signal?.removeEventListener('abort', onParentAbort);
   }
+  if (imageB64) throw new Error('Не удалось передать фото выбранным Vision-шлюзам. Попробуйте позже, смените модель или явно выберите OCR; изображение не было подменено текстом.');
   if (!allowLocalFallback) throw new Error('Облачное соединение не установлено. Локальный ответ не считается проверкой связи.');
   if (fallbackMode === 'tutor') return offlineTutorReply(messages);
   if (fallbackMode === 'check') {
@@ -753,6 +730,13 @@ export function isKnownOpenRouterVisionModel(modelId) {
   );
 }
 
+export function getPhotoCapability({ provider = 'builtin', model, customVision = false } = {}) {
+  if (provider === 'gemini') return { maxImages: 4 };
+  if (provider === 'openrouter') return { maxImages: isKnownOpenRouterVisionModel(model) ? 4 : 0 };
+  if (provider === 'custom') return { maxImages: customVision === true ? 4 : 0 };
+  return { maxImages: ['auto', 'qwen-3.5', 'qwen-2.5-vl', '', undefined].includes(model) ? 1 : 0 };
+}
+
 export async function generateAiBrowser(options) {
   const locked = isTutorModeEnabled();
   const tutorOnly = locked || options.fallbackMode === 'tutor';
@@ -792,166 +776,76 @@ export async function generateAiBrowser(options) {
 }
 
 async function generateAiRequest({
-  provider,
-  apiKey,
-  model,
-  customBaseUrl,
-  systemPrompt,
-  messages,
-  imageB64,
-  ocrText,
-  onStatus,
-  fallbackMode = 'solve',
-  fallbackMeta = {},
-  requiresPhotoContent = false,
-  tutorOnly = false,
-  allowLocalFallback = true,
-  signal,
+  provider, apiKey, model, customBaseUrl, customTransport = 'direct', customVision = false,
+  systemPrompt, messages, imageB64, images, photoMode = 'auto', ocrText, onStatus,
+  fallbackMode = 'solve', fallbackMeta = {}, tutorOnly = false, allowLocalFallback = true, signal,
 }) {
   throwIfUserAborted(signal);
   const key = (apiKey || '').trim();
-  let resolvedOcrText = (ocrText || '').trim();
+  const photos = normalizePhotos(images, imageB64);
+  const photoInputUsed = choosePhotoPlan(photos, photoMode, getPhotoCapability({ provider, model, customVision }));
+  const nativePhotos = photoInputUsed === 'vision' ? photos : [];
+  let resolvedOcrText = photoInputUsed === 'vision' ? '' : String(ocrText || '').trim();
   let visionEngineLabel = '';
-  const visionPurpose = fallbackMode === 'check' ? 'check' : 'solve';
+  const purpose = fallbackMode === 'check' ? 'check' : 'solve';
+  if (provider === 'custom' && customTransport === 'server' && !canUseServerProxy()) {
+    throw new Error('Режим «Через Python-сервер» работает только в серверной версии Домашка.ПРО, не в HTML Viewer, скачанном HTML или GitHub Pages. Запустите server.py и откройте его сайт; либо выберите прямое подключение к доступному API.');
+  }
+  if (provider === 'custom' && !['direct', 'server'].includes(customTransport)) throw new Error('Выберите способ подключения к Ollama заново.');
+  if (provider === 'custom' && photos.length && photoMode === 'auto' && photoInputUsed !== 'vision') {
+    throw new Error('Для Ollama без Vision фото не отправляется в облачный OCR автоматически. Выберите мультимодальную модель и включите поддержку изображений либо явно выберите режим OCR (он может передать фото сторонним сервисам).');
+  }
+  if (photoInputUsed === 'ocr' && !resolvedOcrText) {
+    const pageTexts = [];
+    for (let index = 0; index < photos.length; index += 1) {
+      const rec = await recognizeHomeworkPhoto(photos[index], { purpose, signal, onProgress: (info) => onStatus?.({
+        stage: 'vision', message: `OCR: фото ${index + 1} из ${photos.length}. ${info?.message || 'Модель получит распознанный текст, а не изображение.'}`,
+      }) });
+      if (!rec?.text?.trim()) throw new Error(`Не удалось прочитать фото ${index + 1}. Выберите режим «Само фото» с Vision-моделью или исправьте снимок.`);
+      pageTexts.push(photos.length > 1 ? `[Фото ${index + 1}]:\n${rec.text}` : rec.text);
+      if (rec.engine) visionEngineLabel = rec.engine;
+    }
+    resolvedOcrText = pageTexts.join('\n\n');
+  }
+  const workingMsgs = messages.map((message) => ({ ...message }));
+  if (resolvedOcrText) {
+    const index = workingMsgs.map((m) => m.role).lastIndexOf('user');
+    if (index >= 0) workingMsgs[index].content += `\n\n[${purpose === 'check' ? 'Записи ученика' : 'Задание'}, распознанные с фото — OCR]:\n${resolvedOcrText}`;
+  }
+  if (nativePhotos.length) {
+    systemPrompt += '\nРассмотри сами приложенные изображения: рисунки, графики, схемы и пространственные связи, а не только текст. Если детали неразборчивы, уточни их; не выдумывай. Соблюдай все правила выбранного учебного режима.';
+    onStatus?.({ stage: 'vision', message: `Отправляем само изображение (${nativePhotos.length}) в Vision-модель, без предварительного OCR…` });
+  }
+  const finish = (out) => ({ ...out, extractedPhotoText: resolvedOcrText, visionEngineLabel,
+    photoInputUsed, photoCount: photos.length });
 
-  // Tier 0: When served over HTTP/HTTPS (Live Preview / Python server), use /api/ai-generate first!
-  // Server executes outside client ISP DPI/Cloudflare throttling and returns in ~1-2.5s.
-  if (canUseServerProxy() && provider !== 'custom') {
-    onStatus?.({
-      stage: imageB64 && !resolvedOcrText ? 'vision' : 'thinking',
-      message:
-        imageB64 && !resolvedOcrText
-          ? 'Серверный ИИ считывает фото и оформляет решение...'
-          : tutorOnly ? 'Репетитор готовит следующую подсказку...' : 'ИИ-учитель разбирает задание...',
-    });
+  if (canUseServerProxy() && (provider !== 'custom' || customTransport === 'server')) {
+    onStatus?.({ stage: nativePhotos.length ? 'vision' : 'thinking', message: provider === 'custom'
+      ? 'Ollama через ваш Python-сервер. Первая загрузка модели может занять до двух минут…'
+      : nativePhotos.length ? 'Передаём само фото модели через сервер…' : 'ИИ готовит ответ…' });
     try {
-      return await callServerProxyAi({
-        provider,
-        apiKey: key,
-        model,
-        systemPrompt,
-        messages,
-        imageB64,
-        ocrText: resolvedOcrText,
-        purpose: visionPurpose,
-        tutorOnly, tutorGrade: fallbackMeta.grade, tutorSubject: fallbackMeta.subject,
-        signal,
-      });
-    } catch (srvErr) {
-      if (srvErr?.name === 'AbortError' && signal?.aborted) throw srvErr;
-      if (String(srvErr?.message || '').includes('Неверный API-ключ')) throw srvErr;
-      // Fall through cleanly to browser cloud cascade if static server lacks /api/ai-generate
-    }
-  }
-
-  const isDirectVisionProvider =
-    (provider === 'gemini' && Boolean(key)) ||
-    (provider === 'openrouter' && Boolean(key) && isKnownOpenRouterVisionModel(model));
-
-  // Automatically read photo via multi-tier Neural Vision + Cloud/Local OCR when needed
-  if (imageB64 && !isDirectVisionProvider && !resolvedOcrText) {
-    try {
-      const rec = await recognizeHomeworkPhoto(imageB64, {
-        purpose: visionPurpose,
-        signal,
-        onProgress: (info) =>
-          onStatus?.({
-            stage: 'vision',
-            message: info?.message || 'ИИ-зрение считывает текст и формулы с фотографии...',
-          }),
-      });
-      if (rec?.text) {
-        resolvedOcrText = rec.text;
-        visionEngineLabel = rec.engine || '';
-      }
-    } catch (visionErr) {
-      if (visionErr?.name === 'AbortError' && signal?.aborted) throw visionErr;
-      const hasAnyUserText = messages.some((m) => m.role === 'user' && (m.content || '').trim().length > 0);
-      const isGenericPhotoPrompt =
-        messages.length === 1 &&
-        (messages[0].content.includes('прикреплённого фото') ||
-          messages[0].content.includes('прикреплённой фотографии') ||
-          messages[0].content.includes('на фотографии'));
-      if (requiresPhotoContent || !hasAnyUserText || isGenericPhotoPrompt) {
-        throw visionErr;
+      const out = await callServerProxyAi({ provider, apiKey: key, model, systemPrompt, messages,
+        images: nativePhotos, ocrText: resolvedOcrText, photoMode: nativePhotos.length ? 'vision' : 'ocr', purpose,
+        customVision, tutorOnly, tutorGrade: fallbackMeta.grade, tutorSubject: fallbackMeta.subject, signal });
+      return finish(out);
+    } catch (error) {
+      throwIfUserAborted(signal);
+      // A selected local transport never silently switches to the phone's localhost or a cloud provider.
+      if (provider === 'custom') {
+        if (error?.name === 'TimeoutError') throw new Error('Истекло ожидание Python-сервера (135 секунд). Проверьте Ollama и загрузку модели на компьютере.');
+        if (error instanceof TypeError || /failed to fetch|load failed|networkerror/i.test(error?.message || '')) throw new Error('Не удалось связаться с вашим Python-сервером. Проверьте, что server.py работает и страница открыта с его адреса. GitHub Pages и скачанный HTML не предоставляют этот API.');
+        throw error;
       }
     }
   }
-
-  const appendOcrToMessages = (baseMsgs, extractedText) => {
-    const cloned = baseMsgs.map((m) => ({ ...m }));
-    if (extractedText && cloned.length > 0) {
-      const last = cloned[cloned.length - 1];
-      if (fallbackMode === 'check') {
-        const block =
-          `**Письменная работа / черновик ученика, распознанный с фотографии тетради ` +
-          `(проверь именно эти записи, вычисления, орфографию и пунктуацию ученика):**\n${extractedText}`;
-        last.content = last.content ? `${last.content}\n\n${block}` : block;
-      } else {
-        const block = `[Текст, числа и формулы, прочитанные с фотографии задания]:\n${extractedText}`;
-        last.content = last.content ? `${last.content}\n\n${block}` : `Задание с фотографии:\n${extractedText}`;
-      }
-    }
-    return cloned;
-  };
-
-  const workingMsgs = appendOcrToMessages(messages, resolvedOcrText);
-
-  if (provider === 'openrouter' && key) {
-    const chosenModel = model || 'openrouter/free';
-    const sendImg = imageB64 && isKnownOpenRouterVisionModel(chosenModel) ? imageB64 : null;
-    try {
-      const out = await callOpenRouterBrowser(key, chosenModel, systemPrompt, workingMsgs, sendImg, onStatus, signal);
-      return { ...out, extractedPhotoText: resolvedOcrText, visionEngineLabel };
-    } catch (orErr) {
-      if (orErr?.name === 'AbortError' && signal?.aborted) throw orErr;
-      if (sendImg && !resolvedOcrText && !String(orErr.message || '').includes('Неверный API-ключ')) {
-        const rec = await recognizeHomeworkPhoto(imageB64, {
-          purpose: visionPurpose,
-          signal,
-          onProgress: (info) => onStatus?.({ stage: 'vision', message: info?.message || 'Читаем фото...' }),
-        });
-        resolvedOcrText = rec?.text || '';
-        visionEngineLabel = rec?.engine || '';
-        const retryMsgs = appendOcrToMessages(messages, resolvedOcrText);
-        const out = await callOpenRouterBrowser(key, chosenModel, systemPrompt, retryMsgs, null, onStatus, signal);
-        return { ...out, extractedPhotoText: resolvedOcrText, visionEngineLabel };
-      }
-      throw orErr;
-    }
-  }
-
-  if (provider === 'gemini' && key) {
-    const out = await callGeminiBrowser(key, model || 'gemini-2.5-flash', systemPrompt, workingMsgs, imageB64, onStatus, signal);
-    return { ...out, extractedPhotoText: resolvedOcrText, visionEngineLabel };
-  }
-
-  if (provider === 'custom') {
-    const out = await callCustomLocalBrowser(customBaseUrl, key, model, systemPrompt, workingMsgs, onStatus, signal);
-    return { ...out, extractedPhotoText: resolvedOcrText, visionEngineLabel };
-  }
-
-  const out = await callBuiltinFreeBrowser(
-    systemPrompt,
-    workingMsgs,
-    onStatus,
-    fallbackMode,
-    {
-      ...fallbackMeta,
-      draftText:
-        (fallbackMeta.draftText || '') +
-        (resolvedOcrText ? `\n${resolvedOcrText}` : ''),
-    },
-    signal,
-    model || 'auto',
-    allowLocalFallback
-  );
-  return {
-    ...out,
-    used: visionEngineLabel ? `${out.used} + ${visionEngineLabel}` : out.used,
-    extractedPhotoText: resolvedOcrText,
-    visionEngineLabel,
-  };
+  let out;
+  if (provider === 'openrouter') out = await callOpenRouterBrowser(key, model || 'openrouter/free', systemPrompt, workingMsgs, nativePhotos, onStatus, signal);
+  else if (provider === 'gemini') out = await callGeminiBrowser(key, model || 'gemini-2.5-flash', systemPrompt, workingMsgs, nativePhotos, onStatus, signal);
+  else if (provider === 'custom') out = await callCustomLocalBrowser(customBaseUrl, key, model, systemPrompt, workingMsgs, nativePhotos, onStatus, signal);
+  else out = await callBuiltinFreeBrowser(systemPrompt, workingMsgs, onStatus, fallbackMode,
+    { ...fallbackMeta, draftText: (fallbackMeta.draftText || '') + (resolvedOcrText ? `\n${resolvedOcrText}` : '') },
+    signal, model || 'auto', allowLocalFallback, nativePhotos[0] || null);
+  return finish(out);
 }
 
 // ==================== Interactive AI Quiz & Flashcard Generator ====================
@@ -1061,7 +955,7 @@ export async function generatePracticeQuizBrowser({
   provider,
   apiKey,
   model,
-  customBaseUrl,
+  customBaseUrl, customTransport, customVision,
   onStatus,
   signal,
 }) {
@@ -1079,7 +973,7 @@ export async function generatePracticeQuizBrowser({
       provider,
       apiKey,
       model,
-      customBaseUrl,
+      customBaseUrl, customTransport, customVision,
       systemPrompt: sysPrompt,
       messages: [{ role: 'user', content: `Тема тренировки (${grade} класс): ${cleanTopic}. Сгенерируй JSON из 5 вопросов.` }],
       onStatus,
@@ -1244,7 +1138,7 @@ export async function generateExamVariantBrowser({
   provider,
   apiKey,
   model,
-  customBaseUrl,
+  customBaseUrl, customTransport, customVision,
   onStatus,
   signal,
 }) {
@@ -1270,7 +1164,7 @@ export async function generateExamVariantBrowser({
       provider,
       apiKey,
       model,
-      customBaseUrl,
+      customBaseUrl, customTransport, customVision,
       systemPrompt: sysPrompt,
       messages: [
         {
@@ -1324,7 +1218,7 @@ export async function generateMistakeDrillBrowser({
   provider,
   apiKey,
   model,
-  customBaseUrl,
+  customBaseUrl, customTransport, customVision,
   onStatus,
   signal,
 }) {
@@ -1343,7 +1237,7 @@ export async function generateMistakeDrillBrowser({
       provider,
       apiKey,
       model,
-      customBaseUrl,
+      customBaseUrl, customTransport, customVision,
       systemPrompt: sysPrompt,
       messages: [
         {

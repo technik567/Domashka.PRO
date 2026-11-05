@@ -1,3 +1,5 @@
+import { getPhotoInputLabel } from '../standalone/photoPayload';
+import { getPhotoCapability } from '../standalone/aiClient';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
@@ -24,8 +26,7 @@ import {
   saveInputDraft,
   loadInputDraft,
   runLocalExpressCheck,
-  fileToDataUri,
-  transformImageCanvas,
+  preparePhotoFile,
 } from '../api';
 import MarkdownMath from './MarkdownMath';
 import AiThinkingCard from './AiThinkingCard';
@@ -100,6 +101,10 @@ export default function DraftChecker({
   const [imageBase64, setImageBase64] = useState('');
   const [imagesList, setImagesList] = useState([]);
   const [ocrText, setOcrText] = useState('');
+  const [attachmentBusy, setAttachmentBusy] = useState(false);
+  const [pasteBusy, setPasteBusy] = useState(false);
+  const pasteVersion = useRef(0);
+  const [photoMode, setPhotoMode] = useState(saved.photoMode || 'auto');
 
   const [checking, setChecking] = useState(false);
   const [aiStatus, setAiStatus] = useState(null);
@@ -131,14 +136,18 @@ export default function DraftChecker({
   };
 
   // Auto-save unsent draft locally
+  useEffect(() => { pasteVersion.current++; setPasteBusy(false); }, [imagesList]);
+  useEffect(() => () => { pasteVersion.current++; }, []);
+
   useEffect(() => {
-    saveInputDraft('checker', { checkType, conditionText, draftText });
-  }, [checkType, conditionText, draftText]);
+    saveInputDraft('checker', { checkType, conditionText, draftText, photoMode });
+  }, [checkType, conditionText, draftText, photoMode]);
 
   // Reset on "+ Новое задание / чат"
   useEffect(() => {
     if (!resetSignal) return;
     handleCancelRequest();
+    pasteVersion.current++; setPasteBusy(false);
     setConditionText('');
     setDraftText('');
     setImageBase64('');
@@ -153,16 +162,19 @@ export default function DraftChecker({
   useEffect(() => {
     if (loadedItem && loadedItem.item_type === 'check') {
       handleCancelRequest();
+      pasteVersion.current++; setPasteBusy(false);
       setCheckType(loadedItem.subject || 'general');
       setConditionText(loadedItem.condition_text || '');
       setDraftText(loadedItem.draft_text || loadedItem.task_text || '');
       setImageBase64(loadedItem.image_b64 || '');
       setImagesList(loadedItem.images_b64?.length ? loadedItem.images_b64 : loadedItem.image_b64 ? [loadedItem.image_b64] : []);
       setOcrText(loadedItem.ocr_text || '');
+      setPhotoMode(loadedItem.photo_mode || 'auto');
       setResult({
         id: loadedItem.id,
         markdown: loadedItem.response_md,
         providerUsed: loadedItem.provider_used || '',
+        photoInputUsed: loadedItem.photo_input_used || 'none',
         messages: loadedItem.messages || [],
       });
       setExpressPreview(null);
@@ -211,6 +223,7 @@ export default function DraftChecker({
   const liveWordCount = textXray?.wordCount || 0;
 
   const handlePasteClipboard = async (e) => {
+    if (abortRef.current || attachmentBusy || pasteBusy) return;
     const items = e.clipboardData?.items;
     if (!items) return;
     for (const item of items) {
@@ -218,8 +231,13 @@ export default function DraftChecker({
         e.preventDefault();
         const file = item.getAsFile();
         if (file) {
-          const uri = await fileToDataUri(file);
-          const clean = await transformImageCanvas(uri, { filterMode: 'original', maxDim: 1650 });
+          const operation = ++pasteVersion.current;
+          setPasteBusy(true);
+          let clean;
+          try { clean = await preparePhotoFile(file); }
+          catch (error) { if (operation === pasteVersion.current) setError(error.message); return; }
+          finally { if (operation === pasteVersion.current) setPasteBusy(false); }
+          if (operation !== pasteVersion.current) return;
           setOcrText('');
           setImageBase64(clean);
           setImagesList([clean]);
@@ -231,6 +249,7 @@ export default function DraftChecker({
 
   const handleCheck = async (e) => {
     e?.preventDefault?.();
+    if (attachmentBusy || pasteBusy) return;
     setError('');
 
     if (!draftText.trim() && !imageBase64 && imagesList.length === 0 && !ocrText.trim()) {
@@ -268,6 +287,7 @@ export default function DraftChecker({
       imageBase64,
       imagesList,
       ocrText,
+      photoMode,
       ...authInfo,
       signal: ctrl.signal,
       onStatus: (st) => setAiStatus(st),
@@ -295,6 +315,7 @@ export default function DraftChecker({
       id: res.id,
       markdown: res.markdown,
       providerUsed: res.providerUsed,
+      photoInputUsed: res.photoInputUsed,
       mistakesAdded: res.mistakesAdded || 0,
       messages: res.messages,
     });
@@ -493,6 +514,7 @@ export default function DraftChecker({
                   </button>
                 )}
                 <VoiceMicButton
+                  disabled={checking || chatLoading}
                   onTranscript={(spoken) =>
                     setDraftText((prev) => (prev ? `${prev} ${spoken}` : spoken))
                   }
@@ -564,7 +586,11 @@ export default function DraftChecker({
             )}
           </div>
 
+          {pasteBusy && <p role="status" className="text-xs text-indigo-600 dark:text-indigo-300">Готовим фото из буфера…</p>}
           <PhotoScannerBox
+            onBusyChange={setAttachmentBusy}
+            photoMode={photoMode} onChangePhotoMode={setPhotoMode}
+            localProvider={authInfo.provider === 'custom'} maxVisionImages={getPhotoCapability(authInfo).maxImages} busy={checking || chatLoading || pasteBusy}
             imageBase64={imageBase64}
             imagesList={imagesList}
             onChangeImage={setImageBase64}
@@ -596,7 +622,7 @@ export default function DraftChecker({
 
             <button
               type="submit"
-              disabled={checking}
+              disabled={checking || attachmentBusy || pasteBusy}
               className="w-full sm:w-auto px-7 py-3.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-55 text-white font-extrabold text-sm shadow-lg shadow-emerald-600/20 inline-flex items-center justify-center gap-2 transition"
             >
               <CheckCircle2 className="w-4 h-4" />
@@ -666,6 +692,7 @@ export default function DraftChecker({
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                 Разбор учителя сохранён в чатах ({profile.grade} класс)
               </span>
+              {getPhotoInputLabel(result.photoInputUsed) && <span className="text-[11px] rounded-full bg-sky-50 dark:bg-sky-950/50 text-sky-800 dark:text-sky-300 px-2.5 py-1">{getPhotoInputLabel(result.photoInputUsed)}</span>}
               {result.providerUsed && (
                 <span className="text-[11px] text-slate-500 dark:text-slate-400 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 px-2.5 py-0.5 rounded-full">
                   {result.providerUsed}

@@ -5,16 +5,15 @@ import userEvent from '@testing-library/user-event';
 import AiSettingsModal from '../src/components/AiSettingsModal';
 import ParentModeModal from '../src/components/ParentModeModal';
 import App from '../src/App';
-import { api, DEFAULT_AI_SETTINGS } from '../src/api';
+import { api, DEFAULT_AI_SETTINGS, loadAiSettings } from '../src/api';
 import { getParentalStatus, setTutorModeEnabled } from '../src/standalone/parentalControl';
 
 describe('settings UI', () => {
   it('saves a specific free gateway and keeps a missing saved OpenRouter model visible', async () => {
     const onSave = vi.fn(); const user = userEvent.setup();
-    const { rerender } = render(<AiSettingsModal isOpen settings={DEFAULT_AI_SETTINGS} onSave={onSave} onClose={() => {}} />);
-    await user.selectOptions(screen.getByLabelText('2. Бесплатная облачная модель'), 'pollinations');
-    await user.click(screen.getByRole('button', { name: 'Сохранить настройки' }));
-    expect(onSave.mock.calls[0][0]).toMatchObject({ provider: 'builtin', builtinModel: 'pollinations' });
+    const { rerender } = render(<App />);
+    await user.selectOptions(screen.getByLabelText('Нейросеть для ответа · без ключа'), 'pollinations');
+    expect(loadAiSettings()).toMatchObject({ provider: 'builtin', builtinModel: 'pollinations' });
     vi.spyOn(api, 'getModels').mockResolvedValue({ ok: true, openrouter_free: [{ id: 'openrouter/free', name: 'Auto' }] });
     rerender(<AiSettingsModal isOpen settings={{ ...DEFAULT_AI_SETTINGS, provider: 'openrouter', openrouterKey: 'test', openrouterModel: 'saved/model:free' }} onSave={onSave} onClose={() => {}} />);
     await waitFor(() => expect(screen.getByLabelText('2. Бесплатная модель OpenRouter').value).toBe('saved/model:free'));

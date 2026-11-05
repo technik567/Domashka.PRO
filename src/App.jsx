@@ -138,6 +138,7 @@ export default function App() {
   }
 
   function handleSaveAi(nextSettings) {
+    if (getParentalStatus().enabled) { setParentOpen(true); return; }
     const saved = saveAiSettings(nextSettings);
     setAiSettings(saved);
   }
@@ -419,6 +420,7 @@ export default function App() {
               {activeTab === 'solver' && (
                 <HomeworkSolver
                   tutorOnly={tutorOnly}
+                  onChangeAiSettings={handleSaveAi}
                   profile={profile}
                   aiSettings={aiSettings}
                   onOpenAiSettings={openAiSettings}
@@ -544,6 +546,11 @@ export default function App() {
         onClose={() => setSettingsOpen(false)}
         settings={aiSettings}
         onSave={handleSaveAi}
+          onOpenBuiltinPicker={() => {
+            if (getParentalStatus().enabled) { setParentOpen(true); return; }
+            setActiveTab('solver');
+            setTimeout(() => { document.getElementById('builtin-model-picker')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); document.getElementById('chat-builtin-model')?.focus({ preventScroll: true }); }, 60);
+          }}
       />
     </div>
   );
