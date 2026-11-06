@@ -1,0 +1,103 @@
+{
+  "contractCheckedAt": "2026-11-06",
+  "requestTimeoutMs": 300000,
+  "maxResponseChars": 8000000,
+  "maxEventChars": 100000,
+  "models": [
+    {
+      "id": "gemma-3-12b",
+      "name": "Google Gemma 3 12B · демо",
+      "description": "Модель Google для объяснений, текста и одного фото. Может разбирать рисунки и схемы; мелкие детали и вычисления нужно перепроверять. Это Gemma на Hugging Face, не Gemini API.",
+      "ratings": [
+        4,
+        3,
+        4
+      ],
+      "space": "huggingface-projects/gemma-3-12b-it",
+      "host": "https://huggingface-projects-gemma-3-12b-it.hf.space",
+      "modelId": "google/gemma-3-12b-it",
+      "apiName": "run",
+      "schema": "multimodal",
+      "maxImages": 1,
+      "maxPromptChars": 24000,
+      "sourceRevision": "0c1bcda755bc5bab33d547ed5f3eafb98cb1ed26",
+      "gpuReservationSeconds": 120
+    },
+    {
+      "id": "gemma-3n-e4b",
+      "name": "Google Gemma 3n E4B · демо",
+      "description": "Компактная модель Google для коротких объяснений и одного фото. Для сложной математики и мелкого почерка нужна дополнительная проверка. Работает в облачном демо, веса на телефон не скачиваются.",
+      "ratings": [
+        3,
+        4,
+        3
+      ],
+      "space": "huggingface-projects/gemma-3n-E4B-it",
+      "host": "https://huggingface-projects-gemma-3n-e4b-it.hf.space",
+      "modelId": "google/gemma-3n-E4B-it",
+      "apiName": "generate",
+      "schema": "multimodal",
+      "maxImages": 1,
+      "maxPromptChars": 24000,
+      "sourceRevision": "12676b8ffa570501dbfc92054553808880077d87",
+      "gpuReservationSeconds": 120
+    },
+    {
+      "id": "gemma-2-9b",
+      "name": "Google Gemma 2 9B · демо",
+      "description": "Текстовая модель Google предыдущего поколения для вопросов, языковых упражнений и объяснений. У демо небольшой контекст. Само фото не понимает: используйте OCR или визуальную модель.",
+      "ratings": [
+        3,
+        3,
+        3
+      ],
+      "space": "huggingface-projects/gemma-2-9b-it",
+      "host": "https://huggingface-projects-gemma-2-9b-it.hf.space",
+      "modelId": "google/gemma-2-9b-it",
+      "apiName": "generate",
+      "schema": "text",
+      "maxImages": 0,
+      "maxPromptChars": 10000,
+      "gpuReservationSeconds": 90,
+      "sourceRevision": "459bbd65a9a6e1f7ab30f6ab2cb714fb86d95517"
+    },
+    {
+      "id": "llama-3.2-3b",
+      "name": "Meta Llama 3.2 3B · демо",
+      "description": "Небольшая текстовая модель Meta для коротких вопросов, особенно на английском. Русский язык и сложные задачи могут даваться хуже; перепроверяйте ответы. Фото — только через OCR.",
+      "ratings": [
+        2,
+        4,
+        2
+      ],
+      "space": "huggingface-projects/llama-3.2-3B-Instruct",
+      "host": "https://huggingface-projects-llama-3-2-3b-instruct.hf.space",
+      "modelId": "meta-llama/Llama-3.2-3B-Instruct",
+      "apiName": "generate",
+      "schema": "text",
+      "maxImages": 0,
+      "maxPromptChars": 10000,
+      "sourceRevision": "f04fe964fb25e11733ab5cd1981baa947a020a14",
+      "gpuReservationSeconds": 90
+    },
+    {
+      "id": "mistral-7b",
+      "name": "Mistral 7B v0.3 · демо",
+      "description": "Текстовая модель Mistral для кратких объяснений, языковых заданий и простого кода. Небольшой контекст, сложные расчёты лучше перепроверять. Демо поддерживает hysts, не официальный API Mistral; фото — через OCR.",
+      "ratings": [
+        3,
+        3,
+        3
+      ],
+      "space": "hysts/mistral-7b",
+      "host": "https://hysts-mistral-7b.hf.space",
+      "modelId": "mistralai/Mistral-7B-Instruct-v0.3",
+      "apiName": "generate",
+      "schema": "text",
+      "maxImages": 0,
+      "maxPromptChars": 10000,
+      "sourceRevision": "20a23a03c25fc697edb028d7c7a7b42c98f0c371",
+      "gpuReservationSeconds": 60
+    }
+  ]
+}

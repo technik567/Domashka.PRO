@@ -8,7 +8,7 @@ import zlib
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from . import ollama_service
+from . import ollama_service, public_demos
 
 # Fallback catalog, not a live availability or quota guarantee.
 DEFAULT_OPENROUTER_FREE_MODELS: List[Dict[str, Any]] = [
@@ -350,6 +350,8 @@ def photo_capacity(provider: str, model: str, vision_capable=None) -> int:
         return 4 if (vision_capable if isinstance(vision_capable, bool) else is_openrouter_vision_model(model)) else 0
     if provider == "custom":
         return 4 if vision_capable is True else 0
+    if provider == "builtin" and model in public_demos.MODELS:
+        return public_demos.MODELS[model]["maxImages"]
     return 1 if provider == "builtin" and (model or "auto") in ("auto", "qwen-3.5", "qwen-2.5-vl") else 0
 
 
@@ -796,9 +798,13 @@ def _call_builtin_free(
     has_raw_image_without_ocr: bool = False,
     model: str = "auto",
     image_b64: Optional[str] = None,
+    tutor_only: bool = False,
 ) -> Tuple[str, str]:
     """A fixed choice never silently changes model; only auto cascades."""
     selected = model or "auto"
+    if selected in public_demos.MODELS:
+        text, used = public_demos.call_public_demo(selected, system_prompt, messages, image_b64, tutor_only)
+        return _normalize_latex_delimiters(text), used
     if selected not in ("auto", "qwen-3.5", "pollinations", "qwen-2.5-vl"):
         raise ValueError("Неизвестная бесплатная облачная модель. Выберите её заново в настройках.")
 
@@ -885,7 +891,7 @@ def generate_ai_response(
     elif provider == "custom":
         ans, used = ollama_service.complete(model, openai_messages(system_prompt, working_msgs, native_photos), tutor_only)
     else:
-        ans, used = _call_builtin_free(system_prompt, working_msgs, model=model, image_b64=image_arg)
+        ans, used = _call_builtin_free(system_prompt, working_msgs, model=model, image_b64=image_arg, tutor_only=tutor_only)
     return ans, (f"{used} + {vision_label}" if vision_label else used)
 
 

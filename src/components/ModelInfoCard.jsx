@@ -22,6 +22,11 @@ export default function ModelInfoCard({ provider, model, entry, showNote = true 
         </div>;
       })}
     </div>
+    {profile.sourceUrl && <div className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-400 space-y-1">
+      <p className="font-semibold">{profile.maxImages ? 'Текст + одно фото напрямую' : 'Только текст · для фото нужен OCR'}</p>
+      <p>Публичное демо Hugging Face · без ключа и внешнего аккаунта, в пределах анонимной квоты. Есть очередь; доступ не гарантирован.</p>
+      <a href={profile.sourceUrl} target="_blank" rel="noreferrer" className="underline break-all">Площадка: {profile.sourceName}</a>
+    </div>}
     {showNote && <p className="text-[10px] leading-relaxed text-slate-500 dark:text-slate-400">{RATINGS_NOTE}</p>}
   </div>;
 }
