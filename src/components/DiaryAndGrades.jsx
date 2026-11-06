@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { studyId } from '../standalone/ids';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   CalendarCheck2,
   Calculator,
@@ -22,7 +23,7 @@ import {
 import { SUBJECTS } from '../data/referenceData';
 import TimetableAndBells from './TimetableAndBells';
 import FamilyHomeworkBoard from './FamilyHomeworkBoard';
-import { getManagedChild, WORKSPACE_ID } from '../standalone/accounts';
+import { getManagedChild, getCurrentAccount } from '../standalone/accounts';
 import ExamScoreCalculator from './ExamScoreCalculator';
 import { safeStorage } from '../standalone/storageEngine';
 
@@ -147,7 +148,7 @@ export default function DiaryAndGrades({ grade = 7, onSolveTask, onEarnXp }) {
     } catch {
       // ignore
     }
-    return WORKSPACE_ID ? [] : DEFAULT_TASKS;
+    return getCurrentAccount() ? [] : DEFAULT_TASKS;
   });
 
   const [newSubj, setNewSubj] = useState('math');
@@ -162,22 +163,24 @@ export default function DiaryAndGrades({ grade = 7, onSolveTask, onEarnXp }) {
   const [focusSeconds, setFocusSeconds] = useState(25 * 60);
   const [focusRunning, setFocusRunning] = useState(false);
   const [focusTaskId, setFocusTaskId] = useState(null);
+  const focusRun = useRef(''); const completedFocus = useRef(new Set());
+  const startFocus = () => { if (focusSeconds === focusPresetMin * 60 || !focusRun.current) focusRun.current = studyId(); setFocusRunning(true); };
 
   useEffect(() => {
     if (!focusRunning) return;
-    const id = setInterval(() => {
-      setFocusSeconds((prev) => {
-        if (prev <= 1) {
-          setFocusRunning(false);
-          playSoftBell();
-          if (focusPresetMin >= 15 && onEarnXp) onEarnXp(20);
-          return focusPresetMin * 60;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+    const deadline = Date.now() + focusSeconds * 1000;
+    const id = setInterval(() => setFocusSeconds(Math.max(0, Math.ceil((deadline - Date.now()) / 1000))), 1000);
     return () => clearInterval(id);
-  }, [focusRunning, focusPresetMin, onEarnXp]);
+  }, [focusRunning, focusPresetMin]);
+  useEffect(() => {
+    if (!focusRunning || focusSeconds > 0) return;
+    setFocusRunning(false); setFocusSeconds(focusPresetMin * 60);
+    if (!completedFocus.current.has(focusRun.current)) {
+      completedFocus.current.add(focusRun.current); playSoftBell();
+      try { if (focusPresetMin >= 15) onEarnXp?.(20, `focus:${focusRun.current}`); }
+      catch (error) { setSyncNotice(error.message); }
+    }
+  }, [focusSeconds, focusRunning, focusPresetMin, onEarnXp]);
 
   const switchFocusPreset = (mins) => {
     setFocusRunning(false);
@@ -208,7 +211,7 @@ export default function DiaryAndGrades({ grade = 7, onSolveTask, onEarnXp }) {
       targetDayObj = dayMap.find((d) => d.id === syncDay) || dayMap[0];
     }
 
-    const defaults = WORKSPACE_ID ? Object.fromEntries(Object.keys(FALLBACK_TIMETABLE).map((day) => [day, []])) : FALLBACK_TIMETABLE;
+    const defaults = getCurrentAccount() ? Object.fromEntries(Object.keys(FALLBACK_TIMETABLE).map((day) => [day, []])) : FALLBACK_TIMETABLE;
     let tt = defaults;
     try {
       const savedTt = JSON.parse(safeStorage.getItem(TIMETABLE_KEY) || 'null');
@@ -231,7 +234,7 @@ export default function DiaryAndGrades({ grade = 7, onSolveTask, onEarnXp }) {
       if (existingActiveSubjs.has(key)) return;
       const sObj = SUBJECTS.find((s) => s.id === sid);
       toAdd.push({
-        id: `tt-${Date.now()}-${idx}`,
+        id: studyId(),
         subject: sid,
         text: `Проверить ДЗ по предмету «${sObj?.name || sid}» (запишите номер упражнения или тему)`,
         due: dueLabel,
@@ -272,7 +275,7 @@ export default function DiaryAndGrades({ grade = 7, onSolveTask, onEarnXp }) {
     } catch {
       // ignore
     }
-    if (WORKSPACE_ID) return {};
+    if (getCurrentAccount()) return {};
     return {
       math: [
         { id: 'g1', val: 5, w: 2 }, // домашка
@@ -320,7 +323,7 @@ export default function DiaryAndGrades({ grade = 7, onSolveTask, onEarnXp }) {
     if (!trimmed) return;
     setTasks((prev) => [
       {
-        id: `t-${Date.now()}`,
+        id: studyId(),
         subject: newSubj,
         text: trimmed,
         due: newDue,
@@ -332,17 +335,15 @@ export default function DiaryAndGrades({ grade = 7, onSolveTask, onEarnXp }) {
   };
 
   const handleToggleTask = (id) => {
-    setTasks((prev) =>
-      prev.map((t) => {
-        if (t.id !== id) return t;
-        const nextDone = !t.done;
-        if (nextDone && !t.xpClaimed && onEarnXp) {
-          onEarnXp(10);
-          return { ...t, done: true, xpClaimed: true };
-        }
-        return { ...t, done: nextDone };
-      })
-    );
+    const task = tasks.find((item) => item.id === id); if (!task) return;
+    const done = !task.done; let claimed = task.xpClaimed;
+    // No side effects in React state updater functions: StrictMode may invoke
+    // them twice. A stable event key also deduplicates retries/device conflicts.
+    if (done && !claimed && onEarnXp) {
+      try { onEarnXp(10, `diary:${id}`); claimed = true; }
+      catch (error) { setSyncNotice(error.message); }
+    }
+    setTasks((previous) => previous.map((item) => item.id === id ? { ...item, done, xpClaimed: claimed } : item));
   };
 
   const handleDeleteTask = (id) => {
@@ -493,7 +494,7 @@ export default function DiaryAndGrades({ grade = 7, onSolveTask, onEarnXp }) {
   const handleQuickAddFromTimetable = ({ subject, text }) => {
     setTasks((prev) => [
       {
-        id: `t-${Date.now()}`,
+        id: studyId(),
         subject: subject || 'math',
         text,
         due: 'По расписанию',
@@ -674,7 +675,7 @@ export default function DiaryAndGrades({ grade = 7, onSolveTask, onEarnXp }) {
               <div className="flex items-center gap-1">
                 <button
                   type="button"
-                  onClick={() => setFocusRunning((r) => !r)}
+                  onClick={() => focusRunning ? setFocusRunning(false) : startFocus()}
                   className={`px-2.5 py-1 rounded-lg text-xs font-extrabold inline-flex items-center gap-1 transition ${
                     focusRunning
                       ? 'bg-amber-500 text-white'
@@ -762,7 +763,8 @@ export default function DiaryAndGrades({ grade = 7, onSolveTask, onEarnXp }) {
                     type="button"
                     onClick={() => handleToggleTask(task.id)}
                     className="mt-0.5 text-indigo-600 dark:text-indigo-400 hover:scale-110 transition shrink-0"
-                    title={task.done ? 'Отметить как невыполненное' : 'Отметить выполненным (+10 XP)'}
+                    role="checkbox" aria-checked={task.done} aria-label={`Выполнено: ${task.text}`}
+                    title={task.done ? 'Отметить как невыполненное' : task.xpClaimed ? 'Отметить выполненным (XP уже начислялись)' : 'Отметить выполненным (+10 XP)'}
                   >
                     {task.done ? (
                       <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
@@ -799,7 +801,7 @@ export default function DiaryAndGrades({ grade = 7, onSolveTask, onEarnXp }) {
                         type="button"
                         onClick={() => {
                           setFocusTaskId(task.id);
-                          setFocusRunning(true);
+                          startFocus();
                         }}
                         className={`p-1.5 rounded-xl border transition ${
                           focusTaskId === task.id && focusRunning

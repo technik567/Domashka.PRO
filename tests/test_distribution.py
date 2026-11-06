@@ -116,7 +116,12 @@ class DistributionTests(unittest.TestCase):
         with zipfile.ZipFile(archive_path) as archive:
             self.assertEqual(archive.read('Domashka_PRO/Domashka_PRO.html'), (ROOT / 'Domashka_PRO.html').read_bytes())
             self.assertEqual(archive.read('Domashka_PRO/ПОЛНАЯ_ИНСТРУКЦИЯ.txt'), (ROOT / 'USER_GUIDE.md').read_bytes())
-            self.assertEqual(len(archive.namelist()), 5)
+            self.assertEqual(len(archive.namelist()), 5 + len(build_standalone.DISTRIBUTION_DOCS))
+            for relative in build_standalone.DISTRIBUTION_DOCS:
+                self.assertEqual(archive.read(f'Domashka_PRO/{relative}'), (ROOT / relative).read_bytes())
+            quick = archive.read('Domashka_PRO/КАК_ЗАПУСТИТЬ.txt').decode('utf-8')
+            self.assertNotIn('Галочки/100%', quick)
+            self.assertNotIn('≈ означает', quick)
 
 
 if __name__ == '__main__':

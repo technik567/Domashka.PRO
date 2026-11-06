@@ -7,6 +7,7 @@ export default defineConfig({
   build: {
     outDir: 'static',
     emptyOutDir: true,
+    rollupOptions: { output: { inlineDynamicImports: true } },
   },
   server: {
     host: '0.0.0.0',

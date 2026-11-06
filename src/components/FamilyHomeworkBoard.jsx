@@ -1,5 +1,7 @@
+import { studyId } from '../standalone/ids';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Plus, Send, CheckCircle2, RotateCcw, ImagePlus, Trash2, Download, ClipboardCheck } from 'lucide-react';
+import { cloudConfigured } from '../cloud/bridge';
 import { getCurrentAccount } from '../standalone/accounts';
 import { listHomework, getHomework, assignHomework, submitHomework, reviewHomework, deleteHomework, exportHomework, subscribeHomework, homeworkStorageNotice } from '../standalone/familyHomework';
 import { safeStorage } from '../standalone/storageEngine';
@@ -19,19 +21,19 @@ function downloadJson(text, name) {
 
 function AssignmentForm({ childId, onSaved }) {
   const key = `domashka_family_assign_draft_v4_${childId}`;
-  const [form, setForm] = useState(() => readDraft(key) || { subject: 'math', title: '', instructions: '', due: '' });
+  const [form, setForm] = useState(() => ({ requestId: studyId(), subject: 'math', title: '', instructions: '', due: '', ...readDraft(key) }));
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   useEffect(() => { safeStorage.setItem(key, JSON.stringify(form)); }, [form, key]);
-  const update = (name) => (event) => setForm((old) => ({ ...old, [name]: event.target.value }));
+  const update = (name) => (event) => setForm((old) => ({ ...old, [name]: event.target.value, requestId: studyId() }));
   async function save(event) {
     event.preventDefault(); setError(''); setBusy(true);
     try {
       await assignHomework({ childId, ...form });
-      setForm((old) => ({ ...old, title: '', instructions: '' })); onSaved();
+      setForm((old) => ({ ...old, title: '', instructions: '', requestId: studyId() })); onSaved();
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
   return <form onSubmit={save} className="rounded-2xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/30 p-4 space-y-3">
-    <h3 className="font-bold flex items-center gap-2"><Plus className="w-4 h-4" /> Новое задание ребёнку</h3>
+    <fieldset disabled={busy} className="space-y-3"><h3 className="font-bold flex items-center gap-2"><Plus className="w-4 h-4" /> Новое задание ребёнку</h3>
     <div className="grid sm:grid-cols-2 gap-3">
       <label className="text-xs font-semibold">Предмет<select className={`${field} mt-1`} value={form.subject} onChange={update('subject')}>{SUBJECTS.filter((s) => s.id !== 'auto').map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}</select></label>
       <label className="text-xs font-semibold">Срок сдачи (необязательно)<input className={`${field} mt-1`} type="date" value={form.due} onChange={update('due')} /></label>
@@ -40,20 +42,24 @@ function AssignmentForm({ childId, onSaved }) {
     <label className="block text-xs font-semibold">Условие и что нужно прислать<textarea aria-label="Условие и что нужно прислать" className={`${field} mt-1 min-h-24`} value={form.instructions} onChange={update('instructions')} required maxLength={12000} placeholder="Запишите условие, номер упражнения и требования к ответу…" /></label>
     {error && <p role="alert" className="text-sm text-rose-600">{error}</p>}
     <button className={button} disabled={busy}><Send className="w-4 h-4" />{busy ? 'Сохраняем…' : 'Назначить домашку'}</button>
-    <p className="text-[11px] text-slate-500">Задание появится в аккаунте ребёнка в этом же браузере. На другой телефон оно автоматически не отправится.</p>
-  </form>;
+    <p className="text-[11px] text-slate-500">{cloudConfigured() ? 'После сохранения на сервере задание доступно ребёнку на всех устройствах. На открытом экране нужно обновить список работ.' : 'Задание появится в аккаунте ребёнка в этом же браузере. На другой телефон оно автоматически не отправится.'}</p>
+  </fieldset></form>;
 }
 
 function HomeworkCard({ item, parent, refresh }) {
   const draftKey = `domashka_family_answer_draft_v4_${item.id}`;
+  const reviewKey = `domashka_family_review_draft_v42_${item.id}`;
+  const [baseVersion, setBaseVersion] = useState(() => readDraft(parent ? reviewKey : draftKey)?.version ?? item.version);
   const [answer, setAnswer] = useState(() => readDraft(draftKey)?.answer ?? item.submission?.text ?? '');
   const [image, setImage] = useState(''); const [shownPhoto, setShownPhoto] = useState(''); const [removeExisting, setRemoveExisting] = useState(false); const [loadingPhoto, setLoadingPhoto] = useState(false);
-  const [comment, setComment] = useState(item.review?.comment || ''); const [mark, setMark] = useState(item.review?.mark || '');
+  const [comment, setComment] = useState(() => readDraft(reviewKey)?.comment ?? item.review?.comment ?? ''); const [mark, setMark] = useState(() => readDraft(reviewKey)?.mark ?? item.review?.mark ?? '');
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
-  useEffect(() => { if (!parent) safeStorage.setItem(draftKey, JSON.stringify({ answer })); }, [answer, draftKey, parent]);
+  useEffect(() => { if (!parent) safeStorage.setItem(draftKey, JSON.stringify({ answer, version: baseVersion })); }, [answer, draftKey, parent, baseVersion]);
+  useEffect(() => { if (parent) safeStorage.setItem(reviewKey, JSON.stringify({ comment, mark, version: baseVersion })); }, [comment, mark, parent, reviewKey, baseVersion]);
+  useEffect(() => setShownPhoto(''), [item.version]);
   async function run(action) {
     setError(''); setBusy(true);
-    try { await action(); await refresh(); } catch (err) { setError(err.message); } finally { setBusy(false); }
+    try { const saved = await action(); if (saved?.version) setBaseVersion(saved.version); await refresh(); } catch (err) { setError(err.message); } finally { setBusy(false); }
   }
   async function attach(event) {
     const file = event.target.files?.[0]; event.target.value = ''; if (!file) return;
@@ -73,6 +79,12 @@ function HomeworkCard({ item, parent, refresh }) {
       {item.due && <p className={`text-xs mt-1 ${overdue ? 'text-rose-600 font-bold' : 'text-slate-500'}`}>{overdue ? 'Срок прошёл' : 'Сдать до'}: {item.due}</p>}
     </header>
     <div className="p-4 space-y-4">
+      {item.version !== baseVersion && <div role="alert" className="rounded-xl bg-amber-50 dark:bg-amber-950/40 p-3 text-xs space-y-2">
+        <p>Работа изменилась на другом устройстве. Ваш текст и новое фото не заменены. Проверьте актуальное условие, присланный ответ и отзыв ниже.</p>
+        <button type="button" className="underline font-bold" disabled={busy} onClick={() => {
+          if (window.confirm('Продолжить редактирование актуальной версии, сохранив ваш черновик? Следующая отправка заменит ответ/отзыв показанной версии.')) setBaseVersion(item.version);
+        }}>Я проверил(а) новую версию — сохранить мой черновик</button>
+      </div>}
       <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{item.instructions}</p>
       {item.submission && <section className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800 space-y-2">
         <h5 className="text-xs font-bold">Присланная работа · {new Date(item.submission.submittedAt).toLocaleString('ru-RU')}</h5>
@@ -87,10 +99,10 @@ function HomeworkCard({ item, parent, refresh }) {
       </section>}
       {!parent && item.status !== 'accepted' && <form onSubmit={(event) => { event.preventDefault(); run(async () => {
         const previous = item.submission?.hasImage && !image && !removeExisting ? await getHomework(item.id) : null;
-        await submitHomework(item.id, { answer, image: image || previous?.submission?.image || '' }, item.version);
-        safeStorage.removeItem(draftKey); setImage('');
+        const saved = await submitHomework(item.id, { answer, image: image || previous?.submission?.image || '' }, baseVersion);
+        safeStorage.removeItem(draftKey); setImage(''); return saved;
       }); }} className="space-y-2">
-        <label className="block text-xs font-bold">Мой ответ<textarea aria-label="Мой ответ" className={`${field} mt-1 min-h-28`} value={answer} onChange={(e) => setAnswer(e.target.value)} maxLength={16000} placeholder="Объясни решение своими словами или приложи фото тетради…" /></label>
+        <label className="block text-xs font-bold">Мой ответ<textarea aria-label="Мой ответ" className={`${field} mt-1 min-h-28`} disabled={busy} value={answer} onChange={(e) => setAnswer(e.target.value)} maxLength={16000} placeholder="Объясни решение своими словами или приложи фото тетради…" /></label>
         <div className="flex flex-wrap items-center gap-2">
           <label className="cursor-pointer inline-flex items-center gap-2 rounded-xl border border-slate-300 dark:border-slate-700 p-2 text-xs font-semibold">
             <ImagePlus className="w-4 h-4" />{loadingPhoto ? 'Подготовка фото…' : 'Фото работы'}
@@ -103,17 +115,17 @@ function HomeworkCard({ item, parent, refresh }) {
         <p className="text-[11px] text-slate-500">Текст черновика сохраняется локально. Неотправленное новое фото после выхода нужно прикрепить заново. Для отправки родителю ИИ не используется.</p>
       </form>}
       {parent && item.submission && <div className="space-y-2">
-        <label className="block text-xs font-bold">Комментарий родителя<textarea aria-label="Комментарий родителя" className={`${field} mt-1`} value={comment} onChange={(e) => setComment(e.target.value)} maxLength={8000} placeholder="Что получилось и что стоит исправить?" /></label>
+        <label className="block text-xs font-bold">Комментарий родителя<textarea aria-label="Комментарий родителя" className={`${field} mt-1`} disabled={busy} value={comment} onChange={(e) => setComment(e.target.value)} maxLength={8000} placeholder="Что получилось и что стоит исправить?" /></label>
         <div className="flex flex-wrap gap-2 items-center">
-          <label className="text-xs">Оценка <select aria-label="Оценка" className="rounded-lg border bg-white dark:bg-slate-800 p-2 dark:border-slate-700" value={mark} onChange={(e) => setMark(e.target.value)}><option value="">Без оценки</option>{[1, 2, 3, 4, 5].map((n) => <option key={n}>{n}</option>)}</select></label>
-          <button type="button" className={button} disabled={busy} onClick={() => run(() => reviewHomework(item.id, { accepted: true, comment, mark }, item.version))}><CheckCircle2 className="w-4 h-4" />Принять</button>
-          <button type="button" className="inline-flex items-center gap-2 border rounded-xl p-2 text-xs font-bold dark:border-slate-700 disabled:opacity-50" disabled={busy} onClick={() => run(() => reviewHomework(item.id, { accepted: false, comment, mark }, item.version))}><RotateCcw className="w-4 h-4" />На доработку</button>
+          <label className="text-xs">Оценка <select aria-label="Оценка" className="rounded-lg border bg-white dark:bg-slate-800 p-2 dark:border-slate-700" disabled={busy} value={mark} onChange={(e) => setMark(e.target.value)}><option value="">Без оценки</option>{[1, 2, 3, 4, 5].map((n) => <option key={n}>{n}</option>)}</select></label>
+          <button type="button" className={button} disabled={busy} onClick={() => run(() => reviewHomework(item.id, { accepted: true, comment, mark }, baseVersion))}><CheckCircle2 className="w-4 h-4" />Принять</button>
+          <button type="button" className="inline-flex items-center gap-2 border rounded-xl p-2 text-xs font-bold dark:border-slate-700 disabled:opacity-50" disabled={busy} onClick={() => run(() => reviewHomework(item.id, { accepted: false, comment, mark }, baseVersion))}><RotateCcw className="w-4 h-4" />На доработку</button>
         </div>
         <p className="text-[11px] text-slate-500">Проверка вручную: решение оценивает родитель, а не автоматическая отметка ИИ.</p>
       </div>}
       {error && <p role="alert" className="text-sm text-rose-600">{error}</p>}
       {parent && <button type="button" disabled={busy} className="text-xs text-slate-400 hover:text-rose-600 inline-flex items-center gap-1" onClick={() => {
-        if (window.confirm('Удалить это задание вместе с ответом и фотографией? Сначала можно скачать архив работ.')) run(() => deleteHomework(item.id, item.version));
+        if (window.confirm(cloudConfigured() ? 'Удалить задание и ответ из списка? Сначала можно скачать архив. Сохранённые объекты фото в облаке очищает владелец проекта отдельно.' : 'Удалить это задание вместе с ответом и фотографией? Сначала можно скачать архив работ.')) run(() => deleteHomework(item.id, baseVersion));
       }}><Trash2 className="w-3 h-3" />Удалить задание</button>}
     </div>
   </article>;
@@ -122,15 +134,16 @@ function HomeworkCard({ item, parent, refresh }) {
 export default function FamilyHomeworkBoard({ childId = '', compact = false }) {
   const user = getCurrentAccount(); const parent = user?.role === 'parent';
   const [items, setItems] = useState([]); const [error, setError] = useState(''); const [loading, setLoading] = useState(true);
+  const [hasUpdates, setHasUpdates] = useState(false);
   const [filter, setFilter] = useState('active'); const [visible, setVisible] = useState(8);
   const refresh = useCallback(async () => {
-    try { const list = await listHomework(childId); setItems(list); setError(''); }
+    try { const list = await listHomework(childId); setItems(list); setError(''); setHasUpdates(false); }
     catch (err) { setError(err.message); } finally { setLoading(false); }
   }, [childId]);
   useEffect(() => { let mounted = true;
-    const load = async () => { try { const list = await listHomework(childId); if (mounted) { setItems(list); setError(''); } }
+    const load = async () => { try { const list = await listHomework(childId); if (mounted) { setItems(list); setError(''); setHasUpdates(false); } }
       catch (err) { if (mounted) setError(err.message); } finally { if (mounted) setLoading(false); } };
-    load(); const stop = subscribeHomework(load); const onFocus = () => load(); window.addEventListener('focus', onFocus);
+    load(); const update = () => { if (mounted) setHasUpdates(true); }; const stop = subscribeHomework(update); const onFocus = update; window.addEventListener('focus', onFocus);
     return () => { mounted = false; stop(); window.removeEventListener('focus', onFocus); };
   }, [childId]);
   useEffect(() => setVisible(8), [childId, filter]);
@@ -147,12 +160,13 @@ export default function FamilyHomeworkBoard({ childId = '', compact = false }) {
     {parent && childId && !compact && <AssignmentForm key={childId} childId={childId} onSaved={refresh} />}
     <div className="flex flex-wrap gap-2 text-xs">
       {[['active', 'В работе'], ['submitted', 'На проверке'], ['accepted', 'Принято'], ['all', 'Все']].map(([id, label]) => <button type="button" key={id} onClick={() => setFilter(id)} className={`px-3 py-1.5 rounded-full font-semibold ${id === filter ? 'bg-indigo-600 text-white' : 'bg-slate-100 dark:bg-slate-800'}`}>{label}{id === 'all' ? ` (${items.length})` : ''}</button>)}
-      <button type="button" onClick={refresh} className="ml-auto text-slate-500 underline">Обновить</button>
+      <button type="button" onClick={() => { if (window.confirm('Обновить список? Текстовые черновики сохраняются на устройстве. Неотправленные фото сохраните отдельно перед изменением списка/фильтра.')) refresh(); }} className="ml-auto text-slate-500 underline">Обновить</button>
     </div>
+    {hasUpdates && <p role="status" className="text-xs text-amber-700 dark:text-amber-300">Есть обновления семейных работ. Нажмите «Обновить»; текущие формы не заменяются в фоне.</p>}
     {error && <p role="alert" className="rounded-xl bg-rose-50 dark:bg-rose-950/30 p-3 text-sm text-rose-600">{error}</p>}
     {homeworkStorageNotice() && <p className="text-xs text-amber-700 dark:text-amber-300">{homeworkStorageNotice()}</p>}
     {loading ? <p className="text-sm text-slate-500">Загружаем задания…</p> : !filtered.length && !error ? <p className="p-6 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 text-center text-sm text-slate-500">{filter === 'active' ? 'Незавершённых заданий пока нет.' : 'В этой подборке пока нет работ.'}</p> : null}
-    {filtered.slice(compact ? 0 : visible - 8, compact ? 3 : visible).map((item) => <HomeworkCard key={`${item.id}-${item.version}`} item={item} parent={parent} refresh={refresh} />)}
+    {filtered.slice(compact ? 0 : visible - 8, compact ? 3 : visible).map((item) => <HomeworkCard key={item.id} item={item} parent={parent} refresh={refresh} />)}
     {!compact && visible > 8 && <button type="button" className={`${button} mr-2`} onClick={() => setVisible((n) => Math.max(8, n - 8))}>Предыдущие 8 работ</button>}
     {!compact && filtered.length > visible && <button type="button" className={button} onClick={() => setVisible((n) => n + 8)}>Следующие 8 работ</button>}
     {compact && filtered.length > 3 && <p className="text-xs text-slate-500">Все задания доступны в разделе «Семья».</p>}

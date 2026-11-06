@@ -27,8 +27,9 @@ import {
   recordStudentActivity,
 } from './api';
 import { APP_VERSION } from './version';
+import { cloudConfigured } from './cloud/bridge';
 import FamilyAccounts, { FamilyAccountBar } from './components/FamilyAccounts';
-import { getCurrentAccount, getManagedChild } from './standalone/accounts';
+import { getCurrentAccount, getManagedChild, subscribeAccounts } from './standalone/accounts';
 import { safeStorage } from './standalone/storageEngine';
 import { EXAM_GOALS } from './data/referenceData';
 import HomeworkSolver from './components/HomeworkSolver';
@@ -126,6 +127,8 @@ export default function App() {
     window.addEventListener('storage', refreshSharedSettings);
     return () => window.removeEventListener('storage', refreshSharedSettings);
   }, []);
+
+  useEffect(() => subscribeAccounts(() => { if (getManagedChild()) { setAiSettings(loadAiSettings()); setProfile(loadStudentProfile()); } }), []);
 
   const authInfo = getActiveAuthPayload(aiSettings);
   const isLocalFile = typeof window !== 'undefined' && window.location.protocol === 'file:';
@@ -473,7 +476,7 @@ export default function App() {
                 <DiaryAndGrades
                   grade={profile.grade}
                   onSolveTask={handleSendToSolver}
-                  onEarnXp={(pts) => recordStudentActivity('homework_done', pts)}
+                  onEarnXp={(pts, eventKey) => recordStudentActivity('homework_done', pts, { eventKey })}
                 />
               )}
 
@@ -504,7 +507,7 @@ export default function App() {
       </div>
 
       <footer className="no-print pb-20 md:pb-3 pt-3 px-4 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-center text-xs text-slate-500 dark:text-slate-400">
-        Домашка.ПРО v{APP_VERSION} · ФГОС, ВПР, ОГЭ и ЕГЭ (1–11 класс) · Локальное автосохранение чатов и дневника на вашем устройстве
+        Домашка.ПРО v{APP_VERSION} · ФГОС, ВПР, ОГЭ и ЕГЭ (1–11 класс) · {cloudConfigured() ? 'Облачный кабинет · проверяйте статус синхронизации вверху' : 'Локальное автосохранение чатов и дневника на вашем устройстве'}
       </footer>
 
       {/* Thumb-Friendly Sticky Mobile Bottom Navigation Bar */}

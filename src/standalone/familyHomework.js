@@ -1,3 +1,5 @@
+import { studyId } from './ids';
+import { cloud } from '../cloud/bridge';
 import { getCurrentAccount, ensureWorkspaceActive, canManageChild, persistLocal } from './accounts';
 
 const BACKEND_KEY = 'domashka_family_backend_v4';
@@ -22,6 +24,7 @@ function emit() {
   for (const listener of listeners) listener();
 }
 export function subscribeHomework(listener) {
+  if (cloud()) return cloud().subscribeHomework(listener);
   listeners.add(listener);
   const update = (event) => { if ([CHANGE_KEY, FALLBACK_KEY, null].includes(event.key)) listener(); };
   window.addEventListener('storage', update);
@@ -53,6 +56,7 @@ async function backend() {
   return db;
 }
 export function homeworkStorageNotice() {
+  if (cloud()) return 'Семейные работы сохраняются на сервере. Для отправки и проверки нужна сеть; черновики и неотправленные фото не уходят автоматически.';
   return localStorage.getItem(BACKEND_KEY) === 'localStorage'
     ? 'IndexedDB недоступна: используется ограниченное localStorage. Если место закончится, экспортируйте проверенные работы и удалите их.' : '';
 }
@@ -68,6 +72,7 @@ function validateRecord(item) {
       !['assigned', 'submitted', 'revision', 'accepted'].includes(item.status)) throw new Error('Запись семейного ДЗ повреждена.');
 }
 export async function listHomework(childId = '') {
+  if (cloud()) return cloud().listHomework(childId);
   const user = actor(); const db = await backend();
   const metadata = (item) => ({ ...item, submission: item.submission ? {
     ...item.submission, image: '', hasImage: Boolean(item.submission.image),
@@ -133,11 +138,12 @@ function photo(value) {
   if (typeof value !== 'string' || value.length > 1600000 || !/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/.test(value)) throw new Error('Фото ответа слишком велико или имеет неподдерживаемый формат.');
   return value;
 }
-export async function assignHomework({ childId, subject, title, instructions, due }) {
+export async function assignHomework({ childId, subject, title, instructions, due, requestId }) {
+  if (cloud()) return cloud().writeHomework('assign', requestId || studyId(), { subject, title, instructions, due }, 0, childId);
   const user = actor();
   if (user.role !== 'parent' || !canManageChild(childId)) throw new Error('Задания назначает родитель своему ученику.');
   if (due && (!/^\d{4}-\d{2}-\d{2}$/.test(due) || !Number.isFinite(Date.parse(due)) || new Date(`${due}T12:00:00Z`).toISOString().slice(0, 10) !== due)) throw new Error('Укажите корректную дату сдачи.');
-  const id = crypto.randomUUID();
+  const id = studyId();
   const item = { id, childId, subject: text(subject, 'Предмет', 40, true), title: text(title, 'Заголовок', 200, true),
     instructions: text(instructions, 'Условие', 12000, true), due: due || '', status: 'assigned',
     authorId: user.id, authorName: user.name, createdAt: Date.now(), submission: null, review: null };
@@ -147,6 +153,7 @@ export async function assignHomework({ childId, subject, title, instructions, du
   });
 }
 export async function submitHomework(id, { answer, image = '' }, version) {
+  if (cloud()) return cloud().writeHomework('submit', id, { answer, image }, version);
   const submission = { text: text(answer, 'Ответ', 16000), image: photo(image), submittedAt: Date.now() };
   if (!submission.text && !submission.image) throw new Error('Напишите ответ или приложите фотографию работы.');
   return mutate(id, (item, user) => {
@@ -156,6 +163,7 @@ export async function submitHomework(id, { answer, image = '' }, version) {
   }, version);
 }
 export async function reviewHomework(id, { accepted, comment, mark }, version) {
+  if (cloud()) return cloud().writeHomework('review', id, { accepted, comment, mark }, version);
   if (mark !== '' && mark !== null && mark !== undefined && (!Number.isInteger(Number(mark)) || Number(mark) < 1 || Number(mark) > 5)) throw new Error('Оценка: от 1 до 5 или без оценки.');
   const feedback = text(comment, 'Комментарий', 8000, !accepted);
   return mutate(id, (item, user) => {
@@ -165,12 +173,14 @@ export async function reviewHomework(id, { accepted, comment, mark }, version) {
   }, version);
 }
 export async function deleteHomework(id, version) {
+  if (cloud()) return cloud().writeHomework('delete', id, {}, version);
   return mutate(id, (item, user) => {
     if (!item || user.role !== 'parent' || !canManageChild(item.childId)) throw new Error('Удаление задания доступно родителю.');
     return null;
   }, version);
 }
 export async function getHomework(id) {
+  if (cloud()) return cloud().getHomework(id);
   const user = actor(); const db = await backend();
   const item = db ? await new Promise((resolve, reject) => {
     const request = db.transaction(STORE, 'readonly').objectStore(STORE).get(id);
