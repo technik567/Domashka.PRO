@@ -73,7 +73,7 @@ def prepare_cloud(output_dir, source_file=ROOT / 'Domashka_PRO.html', environ=No
     (output / 'index.html').write_text(configured, encoding='utf-8')
     shutil.copyfile(source, output / 'Domashka_PRO.html')
     (output / '_headers').write_text(HEADERS, encoding='utf-8')
-    for guide in ('USER_GUIDE.md', 'USER_GUIDE.txt', 'REFERENCE_COVERAGE.md', 'docs/CLOUD_SETUP.md', 'docs/PUBLIC_DEMOS.md', 'docs/QA_4.2.md'):
+    for guide in ('USER_GUIDE.md', 'USER_GUIDE.txt', 'REFERENCE_COVERAGE.md', 'docs/CLOUD_SETUP.md', 'docs/CLOUD_LAUNCH.md', 'docs/PUBLIC_DEMOS.md', 'docs/QA_4.2.md'):
         if (ROOT / guide).is_file():
             (output / guide).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / guide, output / guide)

@@ -18,7 +18,7 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(ROOT, "static", "assets")
-DISTRIBUTION_DOCS = ('USER_GUIDE.md', 'REFERENCE_COVERAGE.md', 'docs/CLOUD_SETUP.md', 'docs/PUBLIC_DEMOS.md', 'docs/QA_4.2.md')
+DISTRIBUTION_DOCS = ('USER_GUIDE.md', 'REFERENCE_COVERAGE.md', 'docs/CLOUD_SETUP.md', 'docs/CLOUD_LAUNCH.md', 'docs/PUBLIC_DEMOS.md', 'docs/QA_4.2.md')
 
 
 def inline_katex_fonts(css_text: str) -> str:
