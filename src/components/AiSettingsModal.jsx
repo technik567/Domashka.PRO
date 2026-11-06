@@ -103,7 +103,7 @@ export default function AiSettingsModal({ isOpen, onClose, settings, onSave, onO
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-4">
             {form.provider === 'builtin' && <>
               <p className="text-sm font-bold">Бесплатная модель выбирается прямо в чате</p>
-              <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-400">В блоке настройки ответа есть выбор шлюза, описание и цветные оценки. Провайдеры с ключами по-прежнему настраиваются здесь.</p>
+              <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-400">В блоке настройки ответа — Qwen, Pollinations, Google Gemma, Llama и Mistral с описаниями и цветными оценками. У публичных демо общая GPU-квота; проверка соединения тоже её расходует. Новые демо выбираются вручную, без внешней регистрации. Провайдеры с ключами остаются здесь.</p>
               <button type="button" onClick={() => save(true)} className="px-3 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold">Сохранить и выбрать модель в чате</button>
             </>}
             {form.provider === 'openrouter' && <>

@@ -1,3 +1,5 @@
+import { callPublicDemo } from './publicDemos';
+import { getPublicDemo, PUBLIC_DEMO_TIMEOUT_MS } from './publicModelCatalog';
 import { assertAiAllowed, subscribeAccounts } from './accounts';
 import { requestOpenRouter, OPENROUTER_TIMEOUT_MS } from './openRouterStream';
 import { normalizeCustomEndpoint, describeCustomNetworkError, isLoopbackHost } from './customConnection';
@@ -235,12 +237,13 @@ async function callServerProxyAi({
   const res = await fetchWithTimeout('/api/ai-generate', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      provider, apiKey: provider === 'custom' ? '' : apiKey || '', model: model || '', systemPrompt, messages,
+      provider, apiKey: ['custom', 'builtin'].includes(provider) ? '' : apiKey || '', model: model || '', systemPrompt, messages,
       images, imageBase64: images[0] || null, ocrText: ocrText || '', purpose: purpose || 'solve', photoMode,
       tutorOnly, tutorGrade, tutorSubject,
       supportsVision: getPhotoCapability({ provider, model, customVision }).maxImages > 0,
     }),
-  }, provider === 'custom' ? 135000 : provider === 'openrouter' ? OPENROUTER_TIMEOUT_MS + 15000 : 30000, signal);
+  }, provider === 'custom' ? 135000 : provider === 'openrouter' ? OPENROUTER_TIMEOUT_MS + 15000
+    : provider === 'builtin' && getPublicDemo(model) ? PUBLIC_DEMO_TIMEOUT_MS + 15000 : 30000, signal);
   let data;
   try { data = await res.json(); } catch { throw new Error('Python API недоступен по этому адресу. Статический хостинг/GitHub Pages не запускает сервер Ollama.'); }
   if (!res.ok || !data?.ok || !String(data.text || '').trim()) throw new Error(data?.error || `Сервер ИИ: HTTP ${res.status}, пустой ответ.`);
@@ -539,6 +542,11 @@ async function callBuiltinFreeBrowser(
   throwIfUserAborted(signal);
   const selected = model || 'auto';
   if (!BUILTIN_MODELS.some((m) => m.id === selected)) throw new Error('Неизвестная облачная модель. Выберите её заново в настройках.');
+  if (getPublicDemo(selected)) {
+    const result = await callPublicDemo({ model: selected, systemPrompt, messages, imageB64,
+      tutorOnly: fallbackMode === 'tutor', signal, onStatus });
+    return { ...result, text: normalizeLatex(result.text) };
+  }
   const gateways = {
     'qwen-3.5': callQwen35OmniGateway,
     pollinations: callPollinationsGateway,
@@ -691,6 +699,7 @@ export function getPhotoCapability({ provider = 'builtin', model, customVision =
   if (provider === 'gemini') return { maxImages: 4 };
   if (provider === 'openrouter') return { maxImages: isKnownOpenRouterVisionModel(model) ? 4 : 0 };
   if (provider === 'custom') return { maxImages: customVision === true ? 4 : 0 };
+  if (provider === 'builtin' && getPublicDemo(model)) return { maxImages: getPublicDemo(model).maxImages };
   return { maxImages: ['auto', 'qwen-3.5', 'qwen-2.5-vl', '', undefined].includes(model) ? 1 : 0 };
 }
 
@@ -784,6 +793,7 @@ async function generateAiRequest({
   if (canUseServerProxy() && (provider !== 'custom' || customTransport === 'server')) {
     onStatus?.({ stage: 'cloud', photoInputUsed, message: provider === 'custom'
       ? 'Ollama через ваш Python-сервер. Первая загрузка модели может занять до двух минут…'
+      : provider === 'builtin' && getPublicDemo(model) ? `${getPublicDemo(model).name}: очередь и генерация через сервер, до 5 минут…`
       : nativePhotos.length ? 'Передаём само фото модели через сервер…' : 'ИИ готовит ответ…' });
     try {
       const out = await callServerProxyAi({ provider, apiKey: key, model, systemPrompt, messages,
@@ -792,8 +802,9 @@ async function generateAiRequest({
       return finish(out);
     } catch (error) {
       throwIfUserAborted(signal);
-      // A selected local transport never silently switches to the phone's localhost or a cloud provider.
-      if (provider === 'openrouter' || provider === 'gemini') throw error;
+      // Do not spend a public demo's quota twice after a server failure.
+      // A selected local transport also never switches to the phone's localhost/cloud.
+      if (provider === 'openrouter' || provider === 'gemini' || (provider === 'builtin' && getPublicDemo(model))) throw error;
       if (provider === 'custom') {
         if (error?.name === 'TimeoutError') throw new Error('Истекло ожидание Python-сервера (135 секунд). Проверьте Ollama и загрузку модели на компьютере.');
         if (error instanceof TypeError || /failed to fetch|load failed|networkerror/i.test(error?.message || '')) throw new Error('Не удалось связаться с вашим Python-сервером. Проверьте, что server.py работает и страница открыта с его адреса. GitHub Pages и скачанный HTML не предоставляют этот API.');

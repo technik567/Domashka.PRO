@@ -1,3 +1,5 @@
+import { getPublicDemo } from './publicModelCatalog';
+
 // Editorial UI profiles, NOT measured benchmarks or promises about live gateways.
 const profiles = {
   'builtin:qwen-3.5': { description: 'Универсальный помощник для разбора задач, объяснений и одного фото: может рассматривать схемы и рисунки, а не только извлекать текст.', ratings: [4, 3, 4] },
@@ -16,12 +18,18 @@ const profiles = {
 export const RATINGS_NOTE = 'Условная шкала 1–5 для ориентира, не результаты бенчмарка. Скорость и качество зависят от задачи, нагрузки и квот. Пустые кружки с «нет оценки» не означают слабую модель.';
 
 export function getModelProfile(provider, model, entry = null) {
+  const demo = provider === 'builtin' && getPublicDemo(model);
+  if (demo) return { description: demo.description, ratings: demo.ratings, variable: false,
+    sourceUrl: `https://huggingface.co/spaces/${demo.space}`, sourceName: demo.space, maxImages: demo.maxImages };
+
   const router = (provider === 'builtin' && ['auto', 'pollinations', '', undefined].includes(model)) ||
     (provider === 'openrouter' && (!model || model === 'openrouter/free')) || (provider === 'gemini' && model === 'auto');
   if (router) return {
     description: provider === 'builtin' && model === 'pollinations'
       ? 'Облачный маршрутизатор для текста: внутреннюю модель выбирает Pollinations. Фото сначала распознаются отдельно. Работа без ключа зависит от правил сервиса.'
-      : 'Выбирает доступный вариант автоматически. Мощность, скорость и понимание меняются вместе с выбранной моделью; фиксированную оценку дать нельзя.',
+      : provider === 'builtin'
+        ? 'Автовыбор между прежними шлюзами Qwen/Pollinations. Дополнительные демо Gemma, Llama и Mistral выбираются вручную: их общая GPU-квота не расходуется в фоне. При недоступности сети возможен явно помеченный локальный ответ.'
+        : 'Выбирает доступный вариант автоматически. Мощность, скорость и понимание меняются вместе с выбранной моделью; фиксированную оценку дать нельзя.',
     ratings: [null, null, null], variable: true,
   };
   if (profiles[`${provider}:${model}`]) return { ...profiles[`${provider}:${model}`], variable: false };
