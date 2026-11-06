@@ -51,30 +51,31 @@ describe('nine lessons and independent breaks', () => {
 describe('honest progress phases', () => {
   it('time can never complete the model or saving stages', () => {
     const steps = buildProgressSteps({ stage: 'cloud' }, false, 10000000);
-    expect(steps.map((s) => [s.id, s.done, s.percent])).toEqual([['prepare', true, 100], ['answer', false, 90], ['save', false, 0]]);
-    expect(steps[1].estimated).toBe(true);
+    expect(steps.map((s) => [s.id, s.done, s.active])).toEqual([['prepare', true, false], ['answer', false, true], ['save', false, false]]);
+    expect(steps.every((step) => !('percent' in step) && !('estimated' in step))).toBe(true);
   });
   it('OCR reports only its active progress; saving starts only on an event', () => {
     const steps = buildProgressSteps({ stage: 'vision', progress: 50, estimated: false }, true, 5000);
-    expect(steps.find((s) => s.id === 'vision')).toMatchObject({ percent: 50, active: true, done: false, estimated: false });
-    expect(steps.find((s) => s.id === 'answer').percent).toBe(0);
+    expect(steps.find((s) => s.id === 'vision')).toMatchObject({ active: true, done: false });
+    expect(steps.find((s) => s.id === 'answer').active).toBe(false);
     expect(buildProgressSteps({ stage: 'format' }, false).at(-1)).toMatchObject({ active: true, done: false });
-    expect(buildProgressSteps({ stage: 'done' }, true).every((s) => s.done && s.percent === 100)).toBe(true);
+    expect(buildProgressSteps({ stage: 'done' }, true).every((s) => s.done)).toBe(true);
   });
   it('marks a completed photo phase only on a genuine completion event', () => {
-    expect(buildProgressSteps({ stage: 'vision', progress: 100, estimated: false }, true)[1]).toMatchObject({ done: true, percent: 100 });
-    expect(buildProgressSteps({ stage: 'vision', progress: 100, estimated: true }, true)[1]).toMatchObject({ done: false, percent: 99 });
-    expect(ocrProgressLabel({ stage: 'cloud', progress: 42 }, 1, 4)).toMatch(/^≈35% всех фото/);
-    expect(ocrProgressLabel({ stage: 'done', progress: 100 }, 0, 4)).toMatch(/^25% всех фото/);
-    expect(ocrProgressLabel({ stage: 'done', progress: 100 }, 3, 4)).toMatch(/^100% всех фото/);
+    expect(buildProgressSteps({ stage: 'vision', progress: 100, estimated: false }, true)[1]).toMatchObject({ done: true });
+    expect(buildProgressSteps({ stage: 'vision', progress: 100, estimated: true }, true)[1]).toMatchObject({ done: false });
+    expect(ocrProgressLabel({ stage: 'cloud', progress: 42 }, 1, 4)).toMatch(/^Фото 2 из 4/);
+    expect(ocrProgressLabel({ stage: 'done', progress: 100 }, 0, 4)).toMatch(/^Фото 1 из 4/);
+    expect(ocrProgressLabel({ stage: 'done', progress: 100 }, 3, 4)).toMatch(/^Фото 4 из 4/);
   });
   it('the displayed checklist cannot tick everything during a long request', () => {
     vi.useFakeTimers(); const view = render(<AiThinkingCard status={{ stage: 'cloud', message: 'Waiting' }} />);
     act(() => vi.advanceTimersByTime(120000));
     expect(screen.getByTestId('progress-answer').dataset.state).toBe('active');
     expect(screen.getByTestId('progress-save').dataset.state).toBe('pending');
-    expect(within(screen.getByTestId('progress-answer')).getByRole('progressbar').getAttribute('aria-valuenow')).not.toBe('100');
-    expect(screen.getByText(/оценка ожидания, не внутренний прогресс/)).toBeTruthy();
+    expect(within(screen.getByTestId('progress-answer')).queryByRole('progressbar')).toBeNull();
+    expect(view.container.textContent).not.toMatch(/\d+%/);
+    expect(screen.getByText(/Точный прогресс нейросеть не сообщает/)).toBeTruthy();
     view.unmount(); expect(vi.getTimerCount()).toBe(0);
   });
 });

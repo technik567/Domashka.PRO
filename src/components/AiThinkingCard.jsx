@@ -38,16 +38,12 @@ export default function AiThinkingCard({
   }, []);
 
   const sec = (elapsedMs / 1000).toFixed(1);
-  const phaseStart = useRef({ stage: status?.stage, at: Date.now() });
-  if (phaseStart.current.stage !== status?.stage) phaseStart.current = { stage: status?.stage, at: Date.now() };
   const photoPlan = useRef(status?.photoInputUsed);
   if (status?.photoInputUsed) photoPlan.current = status.photoInputUsed;
-  const steps = buildProgressSteps({ ...status, photoInputUsed: photoPlan.current }, hasPhoto, Date.now() - phaseStart.current.at);
+  const steps = buildProgressSteps({ ...status, photoInputUsed: photoPlan.current }, hasPhoto);
 
   const isQueue = status?.stage === 'queue' && status?.waitTotal > 0;
-  const queuePct = isQueue
-    ? Math.max(5, Math.min(100, Math.round(((status.waitTotal - status.waitRemaining) / status.waitTotal) * 100)))
-    : null;
+
 
   return (
     <div className="animate-fade-up relative overflow-hidden rounded-2xl border border-indigo-200 dark:border-indigo-800/70 bg-gradient-to-br from-white via-indigo-50/40 to-blue-50/60 dark:from-slate-900 dark:via-indigo-950/30 dark:to-slate-900 p-6 shadow-md">
@@ -102,18 +98,11 @@ export default function AiThinkingCard({
         </div>
       </div>
 
-      {/* Queue Pacing Progress Bar (when zero-key channel paces back-to-back calls) */}
+      {/* A real client cooldown, not a model completion estimate. */}
       {isQueue && (
         <div className="mb-5 p-3.5 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/70">
           <div className="flex items-center justify-between gap-2 text-xs font-semibold text-amber-900 dark:text-amber-200 mb-2">
             <span>⏳ Пауза бесплатного канала: следующая попытка через {status.waitRemaining} сек</span>
-            <span>{queuePct}%</span>
-          </div>
-          <div className="w-full h-2.5 bg-amber-200/70 dark:bg-amber-900/60 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-gradient-to-r from-amber-500 to-orange-500 transition-all duration-500 rounded-full"
-              style={{ width: `${queuePct}%` }}
-            />
           </div>
           {onOpenSettings && (
             <div className="mt-2.5 flex items-center justify-between gap-2 flex-wrap">
@@ -135,7 +124,7 @@ export default function AiThinkingCard({
 
       {/* Animated Step Checklist */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-5">
-        {steps.map((st, idx) => {
+        {steps.map((st) => {
           const isDone = st.done;
           const isCurrent = st.active;
           return (
@@ -158,16 +147,9 @@ export default function AiThinkingCard({
               ) : (
                 <span className="w-4 h-4 rounded-full border border-slate-300 dark:border-slate-600 shrink-0" />
               )}
-              <div className="flex-1 min-w-0">
-                <div className="flex items-start justify-between gap-2">
-                  <span className="leading-snug">{st.label}</span>
-                  <span className="font-mono shrink-0">{st.estimated ? '≈' : ''}{st.percent}%</span>
-                </div>
-                <div role="progressbar" aria-label={st.label} aria-valuemin={0} aria-valuemax={100}
-                  aria-valuenow={st.percent} aria-valuetext={`${st.estimated ? 'Оценочно ' : ''}${st.percent}%`}
-                  className="h-1.5 mt-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
-                  <div className={isDone ? 'h-full bg-emerald-500' : 'h-full bg-indigo-500 transition-all duration-500'} style={{ width: `${st.percent}%` }} />
-                </div>
+              <div className="flex-1 min-w-0 flex items-start justify-between gap-2">
+                <span className="leading-snug">{st.label}</span>
+                <span className="shrink-0 text-[10px]">{isDone ? 'Готово' : isCurrent ? 'В работе' : 'Ожидание'}</span>
               </div>
             </div>
           );
@@ -175,7 +157,7 @@ export default function AiThinkingCard({
       </div>
 
       <p className="text-[11px] text-slate-500 dark:text-slate-400 mb-4">
-        ≈ — оценка ожидания, не внутренний прогресс модели. 100% и галочка появляются только после завершения этапа.
+        Точный прогресс нейросеть не сообщает. Показываем текущий этап и прошедшее время, без процентов и обещанного срока.
         При Vision нейросеть анализирует само фото во время получения ответа, а не в отдельном OCR.
       </p>
 

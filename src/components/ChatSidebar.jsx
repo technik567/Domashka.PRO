@@ -351,6 +351,8 @@ export default function ChatSidebar({
               {stats.streakDays || 1} дн. · ⭐ {xp} XP
             </span>
           </div>
+          {stats.importedXp > 0 && <p className="text-[10px] text-amber-800 dark:text-amber-300">В том числе импортировано: {stats.importedXp} XP. Это старый прогресс, не проверка карточек.</p>}
+          {stats.pendingActivities > 0 && <p className="text-[10px] text-amber-800 dark:text-amber-300">В очереди на сервер: {stats.pendingActivities} учебных событий. XP ещё не подтверждены.</p>}
           <div className="h-1.5 rounded-full bg-amber-200/70 dark:bg-amber-900/60 overflow-hidden">
             <div
               className="h-full rounded-full bg-gradient-to-r from-amber-500 to-orange-500 transition-all"

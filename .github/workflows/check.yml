@@ -27,7 +27,12 @@ jobs:
           npm ci
           python -m pip install -r requirements.txt
       - name: JavaScript tests
-        run: npm test && npm run check:reference
+        run: npm test && npm run check:reference && npm run test:cloud
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: Type-check the server-only family function
+        run: deno check --no-config --node-modules-dir=none --frozen --lock=supabase/functions/deno.lock supabase/functions/family-admin/index.ts
       - name: Build the portable app
         run: npm run build:standalone
       - name: Python and distribution tests

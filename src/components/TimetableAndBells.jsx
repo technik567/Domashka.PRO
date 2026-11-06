@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Bell, CalendarDays, Clock, Plus, RotateCcw } from 'lucide-react';
 import { SUBJECTS } from '../data/referenceData';
-import { WORKSPACE_ID } from '../standalone/accounts';
+import { getCurrentAccount } from '../standalone/accounts';
 import { safeStorage } from '../standalone/storageEngine';
 import { MAX_LESSONS, DEFAULT_BELLS, normalizeBells, normalizeTimetable, buildBellRows } from '../standalone/timetable';
 
@@ -27,7 +27,7 @@ const DEFAULT_TIMETABLE = {
 };
 
 export default function TimetableAndBells({ onQuickAddHomework }) {
-  const initialTimetable = useMemo(() => WORKSPACE_ID ? Object.fromEntries(DAYS.map((day) => [day.id, []])) : DEFAULT_TIMETABLE, []);
+  const initialTimetable = useMemo(() => getCurrentAccount() ? Object.fromEntries(DAYS.map((day) => [day.id, []])) : DEFAULT_TIMETABLE, []);
   const realSubjects = useMemo(() => SUBJECTS.filter((s) => s.id !== 'auto'), []);
   const todayJsDay = new Date().getDay(); // 0 Sun .. 6 Sat
   const initialDay = DAYS.find((d) => d.jsDay === todayJsDay)?.id || 'mon';

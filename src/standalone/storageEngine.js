@@ -1,12 +1,15 @@
 // Unified Persistent Storage Engine (IndexedDB for large chat histories + photos, localStorage for fast prefs & drafts, memory fallback)
 import { APP_VERSION } from '../version';
-import { workspaceKey, workspaceDbName, ensureWorkspaceActive } from './accounts';
+import { workspaceKey, workspaceDbName, ensureWorkspaceActive, persistLocal } from './accounts';
+import { cloud } from '../cloud/bridge';
+import { isSyncPreference } from '../cloud/schema';
 
 const memoryMap = new Map();
 const volatileKeys = new Set();
 
 export const safeStorage = {
   getItem(key) {
+    if (cloud() && isSyncPreference(key)) return cloud().getPreference(key);
     key = workspaceKey(key);
     if (volatileKeys.has(key)) return memoryMap.get(key) ?? null;
     try {
@@ -16,6 +19,7 @@ export const safeStorage = {
     }
   },
   setItem(key, value) {
+    if (cloud() && isSyncPreference(key)) { cloud().setPreference(key, String(value)); return; }
     key = workspaceKey(key);
     const str = String(value);
     memoryMap.set(key, str);
@@ -28,6 +32,7 @@ export const safeStorage = {
     }
   },
   removeItem(key) {
+    if (cloud() && isSyncPreference(key)) { cloud().setPreference(key, null); return; }
     key = workspaceKey(key);
     memoryMap.delete(key);
     try {
@@ -37,6 +42,11 @@ export const safeStorage = {
       volatileKeys.add(key);
       // Ignore
     }
+  },
+  setItemStrict(key, value) {
+    if (cloud() && isSyncPreference(key)) throw new Error('В облаке нужен подтверждённый сервером результат.');
+    const scoped = workspaceKey(key); const text = String(value);
+    persistLocal(scoped, text); memoryMap.set(scoped, text); volatileKeys.delete(scoped);
   },
   isPersistent() {
     try {
@@ -51,7 +61,7 @@ export const safeStorage = {
 };
 
 // ==================== IndexedDB Wrapper for Unlimited Chat & Photo History ====================
-const IDB_NAME = workspaceDbName();
+let idbName; // resolved once, after account/bootstrap; never changes mid-page
 const IDB_STORE = 'chats';
 const LS_FALLBACK_KEY = 'domashka_pro_notebook_history_v2';
 
@@ -67,7 +77,7 @@ function openChatDB() {
         resolve(null);
         return;
       }
-      const req = indexedDB.open(IDB_NAME, 1);
+      const req = indexedDB.open(idbName ||= workspaceDbName(), 1);
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains(IDB_STORE)) {
@@ -145,9 +155,9 @@ function writeFallbackList(list) {
 
 export const chatStore = {
   async list({ filter = 'all', search = '' } = {}) {
-    const db = await openChatDB();
+    const db = cloud() ? null : await openChatDB();
     let all = [];
-    if (db) {
+    if (cloud()) { all = cloud().listChats(); } else if (db) {
       await migrateLegacyLocalStorageIfNeeded(db);
       all = await new Promise((resolve) => {
         const tx = db.transaction(IDB_STORE, 'readonly');
@@ -180,6 +190,7 @@ export const chatStore = {
   },
 
   async get(id) {
+    if (cloud()) return cloud().getChat(id);
     const db = await openChatDB();
     if (db) {
       return new Promise((resolve) => {
@@ -251,6 +262,7 @@ export const chatStore = {
       messages,
     };
 
+    if (cloud()) { await cloud().putChat(record); recordStudentActivity(item_type); return record; }
     const db = await openChatDB();
     if (db) {
       ensureWorkspaceActive();
@@ -279,6 +291,7 @@ export const chatStore = {
       ...patch,
       updated_at: Math.floor(Date.now() / 1000),
     };
+    if (cloud()) return cloud().putChat(updated);
     const db = await openChatDB();
     if (db) {
       ensureWorkspaceActive();
@@ -304,6 +317,7 @@ export const chatStore = {
   },
 
   async delete(id) {
+    if (cloud()) return cloud().deleteChat(id);
     ensureWorkspaceActive();
     const db = await openChatDB();
     if (db) {
@@ -322,6 +336,7 @@ export const chatStore = {
   },
 
   async clearAll() {
+    if (cloud()) return cloud().clearChats();
     ensureWorkspaceActive();
     const db = await openChatDB();
     if (db) {
@@ -338,6 +353,7 @@ export const chatStore = {
   },
 
   async exportJson() {
+    if (cloud()) return cloud().exportChats();
     const items = await this.list();
     return JSON.stringify(
       {
@@ -360,7 +376,7 @@ export const chatStore = {
     }
     const existing = await this.list();
     const seen = new Set(existing.map((x) => x.id));
-    const db = await openChatDB();
+    const db = cloud() ? null : await openChatDB();
     let added = 0;
     for (const item of incoming) {
       if (item && (typeof item.id === 'string' || (typeof item.id === 'number' && Number.isFinite(item.id))) &&
@@ -373,7 +389,9 @@ export const chatStore = {
         item.images_b64 = Array.isArray(item.images_b64) ? item.images_b64.filter((uri) => typeof uri === 'string').slice(0, 4) : [];
         seen.add(item.id);
         added++;
-        if (db) {
+        ensureWorkspaceActive();
+        if (cloud()) await cloud().putChat(item);
+        else if (db) {
           await new Promise((resolve) => {
             const tx = db.transaction(IDB_STORE, 'readwrite');
             tx.objectStore(IDB_STORE).put(item);
@@ -384,7 +402,7 @@ export const chatStore = {
         existing.push(item);
       }
     }
-    writeFallbackList(existing);
+    if (!cloud()) writeFallbackList(existing);
     notifyHistoryListeners();
     return { added, total: existing.length };
   },
@@ -393,6 +411,7 @@ export const chatStore = {
 // ==================== Event Emitter for Live Chat List Sync ====================
 const listeners = new Set();
 export function subscribeHistory(fn) {
+  if (cloud()) return cloud().subscribe(fn);
   listeners.add(fn);
   return () => listeners.delete(fn);
 }
@@ -428,47 +447,52 @@ export function loadInputDraft(section) {
 // ==================== Student Progress, XP & Streak ====================
 const STATS_KEY = 'domashka_student_stats_v3';
 
-export function getStudentStats() {
+const COUNTERS = ['solvedCount', 'checkedCount', 'quizCorrect', 'xp', 'streakDays'];
+function localStats() {
+  const base = { solvedCount: 0, checkedCount: 0, quizCorrect: 0, xp: 0, streakDays: 1, lastActiveDate: '', rewardClaims: {} };
   try {
-    const raw = safeStorage.getItem(STATS_KEY);
-    const base = {
-      solvedCount: 0,
-      checkedCount: 0,
-      quizCorrect: 0,
-      xp: 0,
-      streakDays: 1,
-      lastActiveDate: '',
-    };
-    if (!raw) return base;
-    return { ...base, ...JSON.parse(raw) };
-  } catch {
-    return { solvedCount: 0, checkedCount: 0, quizCorrect: 0, xp: 0, streakDays: 1, lastActiveDate: '' };
-  }
+    const raw = JSON.parse(safeStorage.getItem(STATS_KEY) || '{}');
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return base;
+    const result = { ...base, ...raw };
+    for (const key of COUNTERS) result[key] = Number.isSafeInteger(raw[key]) && raw[key] >= 0 ? raw[key] : base[key];
+    if (!result.rewardClaims || typeof result.rewardClaims !== 'object' || Array.isArray(result.rewardClaims)) result.rewardClaims = {};
+    return result;
+  } catch { return base; }
 }
-
-export function recordStudentActivity(type, xpGain = 15) {
-  const cur = getStudentStats();
-  const today = new Date().toISOString().slice(0, 10);
-  let streak = cur.streakDays || 1;
-  if (cur.lastActiveDate && cur.lastActiveDate !== today) {
-    const prev = new Date(cur.lastActiveDate);
-    const now = new Date(today);
-    const diffDays = Math.round((now - prev) / 86400000);
-    if (diffDays === 1) streak += 1;
-    else if (diffDays > 1) streak = 1;
-  }
-  const next = {
-    ...cur,
-    solvedCount: cur.solvedCount + (type === 'solve' ? 1 : 0),
-    checkedCount: cur.checkedCount + (type === 'check' ? 1 : 0),
-    quizCorrect: cur.quizCorrect + (type === 'quiz_correct' ? 1 : 0),
-    xp: (cur.xp || 0) + xpGain,
-    streakDays: streak,
-    lastActiveDate: today,
-  };
-  safeStorage.setItem(STATS_KEY, JSON.stringify(next));
-  notifyHistoryListeners();
-  return next;
+export function getStudentStats() { return cloud() ? cloud().getStudentStats() : localStats(); }
+function nextStats(cur, type, xpGain) {
+  const date = new Date();
+  // Calendar days in the device's local timezone, not UTC and not 24h/DST intervals.
+  const today = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+  const previous = /^\d{4}-\d{2}-\d{2}$/.test(cur.lastActiveDate) ? Date.parse(cur.lastActiveDate + 'T00:00:00Z') : NaN;
+  const difference = (Date.parse(today + 'T00:00:00Z') - previous) / 86400000;
+  const streak = difference === 1 ? (cur.streakDays || 1) + 1 : difference > 1 ? 1 : cur.streakDays || 1;
+  return { ...cur, solvedCount: cur.solvedCount + (type === 'solve' ? 1 : 0),
+    checkedCount: cur.checkedCount + (type === 'check' ? 1 : 0), quizCorrect: cur.quizCorrect + (type === 'quiz_correct' ? 1 : 0),
+    xp: cur.xp + xpGain, streakDays: streak, lastActiveDate: today };
+}
+export function recordStudentActivity(type, xpGain = 15, options = {}) {
+  ensureWorkspaceActive();
+  if (!['solve','check','quiz','quiz_correct','homework_done'].includes(type) || !Number.isSafeInteger(xpGain) || xpGain < 0 || xpGain > 240) throw new Error('Некорректное начисление опыта.');
+  if (cloud()) return cloud().recordStudentActivity(type, xpGain, options);
+  const current = localStats(); const key = options.eventKey ? `${type}:${options.eventKey}` : '';
+  if (key && Object.hasOwn(current.rewardClaims, key)) return current;
+  const next = nextStats(current, type, xpGain);
+  if (key) { next.rewardClaims = { ...current.rewardClaims, [key]: true }; safeStorage.setItemStrict(STATS_KEY, JSON.stringify(next)); }
+  else safeStorage.setItem(STATS_KEY, JSON.stringify(next));
+  notifyHistoryListeners(); return next;
+}
+export function rewardVerifiedFlashcard(cardKey) {
+  ensureWorkspaceActive();
+  if (cloud()) throw new Error('Облачные карточки проверяет сервер.');
+  const current = localStats(); const key = `card:${cardKey}`;
+  if (Object.hasOwn(current.rewardClaims, key)) return 0;
+  const next = nextStats(current, 'quiz_correct', 4);
+  next.rewardClaims = { ...current.rewardClaims, [key]: true };
+  // Claim and XP are ONE durable write. A quota error grants neither; a crash
+  // between separate writes cannot consume a reward without updating the score.
+  safeStorage.setItemStrict(STATS_KEY, JSON.stringify(next));
+  notifyHistoryListeners(); return 4;
 }
 
 // ==================== Personal Mistake Bank ("Копилка моих ошибок" v3.2) ====================
@@ -476,6 +500,7 @@ const MISTAKES_KEY = 'domashka_mistake_bank_v32';
 const mistakeListeners = new Set();
 
 export function subscribeMistakes(fn) {
+  if (cloud()) return cloud().subscribe(fn);
   mistakeListeners.add(fn);
   return () => mistakeListeners.delete(fn);
 }

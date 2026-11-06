@@ -655,13 +655,13 @@ async function tryLocalTesseractOcr(dataUri, onProgress, externalSignal) {
               onProgress?.({
                 stage: 'ocr_fallback',
                 progress: 78 + Math.round(pct * 0.2),
-                message: `Локальный сканер читает строки (${pct}%)...`,
+                message: 'Локальный сканер читает строки…',
               });
             } else if (m.status?.includes('loading') || m.status?.includes('initializing')) {
               onProgress?.({
                 stage: 'ocr_fallback',
                 progress: 70 + Math.round(pct * 0.08),
-                message: `Подготовка быстрого русскоязычного словаря (${pct}%)...`,
+                message: 'Подготовка быстрого русскоязычного словаря…',
               });
             }
           }

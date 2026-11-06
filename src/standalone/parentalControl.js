@@ -1,14 +1,14 @@
 import { workspaceKey, isChildWorkspace, getManagedChild, subscribeAccounts, ensureWorkspaceActive } from './accounts';
 
-const STORAGE_KEY = workspaceKey('domashka_parental_control_v1');
-const ATTEMPTS_KEY = workspaceKey('domashka_parental_attempts_v1');
+const STORAGE_KEY = () => workspaceKey('domashka_parental_control_v1');
+const ATTEMPTS_KEY = () => workspaceKey('domashka_parental_attempts_v1');
 const ITERATIONS = 310000;
 const listeners = new Set();
 let lastKnownConfig = null;
 
 function readConfig() {
   let raw;
-  try { raw = window.localStorage.getItem(STORAGE_KEY); }
+  try { raw = window.localStorage.getItem(STORAGE_KEY()); }
   catch { return lastKnownConfig; }
   if (!raw) return (lastKnownConfig = null);
   try {
@@ -46,7 +46,7 @@ export function subscribeParentalControl(listener) {
   listeners.add(listener);
   const stopAccounts = subscribeAccounts(listener);
   const onStorage = (event) => {
-    if (event.key === STORAGE_KEY || event.key === null) listener();
+    if (event.key === STORAGE_KEY() || event.key === null) listener();
   };
   window.addEventListener('storage', onStorage);
   return () => {
@@ -59,8 +59,8 @@ export function subscribeParentalControl(listener) {
 function writeConfig(config) {
   const value = JSON.stringify(config);
   try {
-    window.localStorage.setItem(STORAGE_KEY, value);
-    if (window.localStorage.getItem(STORAGE_KEY) !== value) throw new Error('Not persisted');
+    window.localStorage.setItem(STORAGE_KEY(), value);
+    if (window.localStorage.getItem(STORAGE_KEY()) !== value) throw new Error('Not persisted');
   } catch {
     throw new Error('Не удалось сохранить защиту. Разрешите хранение данных в браузере и освободите место. Режим не изменён.');
   }
@@ -92,7 +92,7 @@ async function hashPassword(password, salt) {
 }
 
 function readAttempts() {
-  try { return JSON.parse(window.localStorage.getItem(ATTEMPTS_KEY)) || {}; }
+  try { return JSON.parse(window.localStorage.getItem(ATTEMPTS_KEY())) || {}; }
   catch { return {}; }
 }
 
@@ -107,14 +107,14 @@ async function verifyPassword(password, config) {
   if (difference) {
     const count = (Number(attempts.count) || 0) + 1;
     const until = count >= 5 ? Date.now() + Math.min(300000, 30000 * 2 ** Math.min(count - 5, 4)) : 0;
-    try { window.localStorage.setItem(ATTEMPTS_KEY, JSON.stringify({ count, until })); } catch { /* lock itself remains persisted */ }
+    try { window.localStorage.setItem(ATTEMPTS_KEY(), JSON.stringify({ count, until })); } catch { /* lock itself remains persisted */ }
     throw new Error(until ? 'Неверный пароль. Следующая попытка — через 30 секунд или позже.' : 'Неверный родительский пароль.');
   }
   const current = readConfig();
   if (current?.hash !== config.hash || current?.enabled !== config.enabled) {
     throw new Error('Настройки изменились в другой вкладке. Повторите действие.');
   }
-  try { window.localStorage.removeItem(ATTEMPTS_KEY); } catch { /* no effect on the lock */ }
+  try { window.localStorage.removeItem(ATTEMPTS_KEY()); } catch { /* no effect on the lock */ }
 }
 
 export async function setTutorModeEnabled(enabled, password) {
