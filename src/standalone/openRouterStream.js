@@ -14,7 +14,7 @@ function providerError(status) {
 
 // No speculative retries: a timed-out generation may still be billed by the provider.
 // Reasoning deltas are deliberately not returned or retained; only answer text is collected.
-export async function requestOpenRouter({ apiKey, model, messages, tutor = false, signal: externalSignal, onStatus }) {
+export async function requestOpenRouter({ apiKey, model, messages, tutor = false, signal: externalSignal, onStatus, reasoningEffort }) {
   const { signal, cleanup } = linkAbortSignals(externalSignal, OPENROUTER_TIMEOUT_MS);
   let reader;
   try {
@@ -23,7 +23,7 @@ export async function requestOpenRouter({ apiKey, model, messages, tutor = false
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST', signal,
       headers: { Authorization: `Bearer ${apiKey.trim()}`, 'Content-Type': 'application/json', 'X-Title': 'Domashka.PRO' },
-      body: JSON.stringify({ model, messages, stream: true, temperature: 0.35, max_tokens: tutor ? 1600 : 6000 }),
+      body: JSON.stringify({ model, messages, stream: true, temperature: 0.35, max_tokens: reasoningEffort ? (tutor ? 10000 : 16000) : (tutor ? 1600 : 6000), ...(['low','medium','high'].includes(reasoningEffort) ? { reasoning: { effort: reasoningEffort, exclude: true } } : {}) }),
     });
     if (!response.ok) throw new Error(providerError(response.status));
     let answer = ''; let usedModel = model; let ended = false; let finishReason = ''; let totalChars = 0;

@@ -1,3 +1,5 @@
+import GuidedTour from './GuidedTour';
+import SiteAssistant from './SiteAssistant';
 import React, { useEffect, useRef, useState } from 'react';
 import { Cloud, Download, RefreshCw, ShieldCheck, LogIn } from 'lucide-react';
 import { initializeCloud } from '../cloud/runtime';
@@ -39,6 +41,7 @@ export function CloudCaptcha({ onToken, reset = 0 }) {
 }
 
 function CloudLogin({ recovery = false, initialError = '' }) {
+  const [tourReplay, setTourReplay] = useState(0);
   const [mode, setMode] = useState(recovery ? 'recovery' : 'login');
   const [login, setLogin] = useState(''); const [password, setPassword] = useState(''); const [confirm, setConfirm] = useState('');
   const [name, setName] = useState(''); const [avatar, setAvatar] = useState('🦉');
@@ -80,9 +83,9 @@ function CloudLogin({ recovery = false, initialError = '' }) {
   }
   return <main className="min-h-screen bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex justify-center items-center p-4">
     <section className="max-w-lg w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-7 shadow-xl space-y-5">
-      <header className="flex gap-3 items-center"><Cloud className="w-9 h-9 text-indigo-600 shrink-0" /><div><h1 className="text-xl font-black">Домашка.ПРО {APP_VERSION}</h1><p className="text-xs text-slate-500">Облачный кабинет · один аккаунт на компьютере и телефоне</p></div></header>
-      {mode !== 'recovery' && <div className="flex flex-wrap gap-2 text-xs font-bold">{[['login','Войти'],['register','Я родитель: регистрация'],['reset','Забыли пароль?']].map(([id,label]) => <button key={id} type="button" disabled={busy} onClick={() => choose(id)} className={`rounded-xl px-3 py-2 ${mode === id ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-200' : 'bg-slate-100 dark:bg-slate-800'}`}>{label}</button>)}</div>}
-      <form onSubmit={submit} className="space-y-4" aria-label="Облачный вход">
+      <header data-tour="cloud-intro" className="flex gap-3 items-center"><Cloud className="w-9 h-9 text-indigo-600 shrink-0" /><div><h1 className="text-xl font-black">Домашка.ПРО {APP_VERSION}</h1><p className="text-xs text-slate-500">Облачный кабинет · один аккаунт на компьютере и телефоне</p></div></header>
+      {mode !== 'recovery' && <div data-tour="cloud-auth-actions" className="flex flex-wrap gap-2 text-xs font-bold">{[['login','Войти'],['register','Я родитель: регистрация'],['reset','Забыли пароль?']].map(([id,label]) => <button key={id} type="button" disabled={busy} onClick={() => choose(id)} className={`rounded-xl px-3 py-2 ${mode === id ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-200' : 'bg-slate-100 dark:bg-slate-800'}`}>{label}</button>)}</div>}
+      <form data-tour="cloud-auth-form" onSubmit={submit} className="space-y-4" aria-label="Облачный вход">
         {mode !== 'recovery' && <label className="block text-sm font-semibold">{mode === 'login' ? 'Почта родителя или полный логин ребёнка' : 'Почта родителя'}
           <input className={field} type={mode === 'login' ? 'text' : 'email'} value={login} onChange={(e) => setLogin(e.target.value)} required maxLength={254} autoCapitalize="none" autoCorrect="off" autoComplete={mode === 'login' ? 'username' : 'email'} />
         </label>}
@@ -106,6 +109,7 @@ function CloudLogin({ recovery = false, initialError = '' }) {
       <details className="text-xs leading-relaxed text-slate-500"><summary className="cursor-pointer font-bold">Что хранится в облаке</summary><p className="mt-2">Профили, учебная статистика, тетрадь и отправленные фото, дневник, расписание, закладки, ошибки и семейные задания. Ключи ИИ, локальные пароли и неотправленные черновики не синхронизируются. Бесплатное облако имеет лимиты и может быть приостановлено владельцем или провайдером. Это не школьный электронный дневник.</p></details>
       <a href="./Domashka_PRO.html" download className="inline-flex gap-1 items-center text-xs font-bold text-indigo-600 dark:text-indigo-300"><Download className="w-3.5 h-3.5" />Скачать отдельную автономную версию без синхронизации</a>
     </section>
+  {mode !== 'recovery' && <><SiteAssistant allowRemote={false} page="family" onReplayTour={() => setTourReplay((n) => n+1)} /><GuidedTour auth replay={tourReplay} /></>}
   </main>;
 }
 

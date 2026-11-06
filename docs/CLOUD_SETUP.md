@@ -160,3 +160,9 @@ SQL-прогон исполняет настоящие миграции на Pos
 - https://developers.cloudflare.com/pages/platform/limits/
 - https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits
 - Точная формулировка про чувствительные операции: https://github.com/github/docs/blob/main/data/reusables/pages/no_sensitive_data_pages.md
+
+## Дополнения 4.3
+
+Новые проекты применяют все семь SQL-файлов в порядке имён. В уже подготовленном проекте миграции повторно не выполняют: проверяйте историю. Поиск использует отдельную `web-search` функцию, owner-only Tavily key и ту же точную `DOMASHKA_ALLOWED_ORIGINS`: [контракт и квоты](AI_FEATURES.md#поиск-tavily).
+
+Для первого Direct Upload можно собрать с `DOMASHKA_SITE_URL=auto` и `python3 scripts/prepare_cloud.py --zip Domashka_PRO_Cloudflare.zip`. Origin определяется из реального HTTPS-адреса, не из HTML-файла. Auth redirects/Origins/SMTP/CAPTCHA это не настраивает: после deployment задайте точный адрес сервера по [CLOUD_LAUNCH.md](CLOUD_LAUNCH.md). Для постоянного автосборочного проекта Git-интеграцию Pages выбирайте при создании.
