@@ -1,3 +1,9 @@
+import { buildSiteHelpPrompt } from './helpKnowledge';
+import { getCurrentAccount } from './accounts';
+import { cloudConfigured } from '../cloud/bridge';
+import { GRAPHIC_ANSWER_PROMPT } from './answerCharts';
+import { normalizeReasoning, reasoningPrompt, reasoningInfo, rememberReasoningCapabilities, geminiThinkingConfig } from './aiModes';
+import { runWebSearch, searchContext, searchFooter } from './webSearch';
 import { callPublicDemo } from './publicDemos';
 import { getPublicDemo, PUBLIC_DEMO_TIMEOUT_MS } from './publicModelCatalog';
 import { assertAiAllowed, subscribeAccounts } from './accounts';
@@ -95,6 +101,7 @@ export async function fetchFreeModelsBrowser(force = false) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
     if (!Array.isArray(json.data)) throw new Error('Некорректный каталог моделей');
+    rememberReasoningCapabilities(json.data);
     const list = [DEFAULT_OPENROUTER_FREE_MODELS[0]];
     const seen = new Set(['openrouter/free']);
     for (const m of json.data) {
@@ -232,18 +239,18 @@ function blankPngBlob() {
 
 async function callServerProxyAi({
   provider, apiKey, model, systemPrompt, messages, images = [], ocrText, purpose,
-  photoMode = 'auto', customVision = false, tutorOnly = false, tutorGrade = 8, tutorSubject = 'auto', signal,
+  photoMode = 'auto', customVision = false, tutorOnly = false, tutorGrade = 8, tutorSubject = 'auto', reasoning = 'off', graphics = false, signal,
 }) {
   const res = await fetchWithTimeout('/api/ai-generate', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       provider, apiKey: ['custom', 'builtin'].includes(provider) ? '' : apiKey || '', model: model || '', systemPrompt, messages,
       images, imageBase64: images[0] || null, ocrText: ocrText || '', purpose: purpose || 'solve', photoMode,
-      tutorOnly, tutorGrade, tutorSubject,
+      tutorOnly, tutorGrade, tutorSubject, reasoning, graphics, reasoningNative: provider === 'openrouter' && reasoningInfo(provider, model, reasoning).native,
       supportsVision: getPhotoCapability({ provider, model, customVision }).maxImages > 0,
     }),
   }, provider === 'custom' ? 135000 : provider === 'openrouter' ? OPENROUTER_TIMEOUT_MS + 15000
-    : provider === 'builtin' && getPublicDemo(model) ? PUBLIC_DEMO_TIMEOUT_MS + 15000 : 30000, signal);
+    : provider === 'builtin' && getPublicDemo(model) ? PUBLIC_DEMO_TIMEOUT_MS + 15000 : reasoning !== 'off' && provider === 'gemini' ? 135000 : 30000, signal);
   let data;
   try { data = await res.json(); } catch { throw new Error('Python API недоступен по этому адресу. Статический хостинг/GitHub Pages не запускает сервер Ollama.'); }
   if (!res.ok || !data?.ok || !String(data.text || '').trim()) throw new Error(data?.error || `Сервер ИИ: HTTP ${res.status}, пустой ответ.`);
@@ -251,14 +258,14 @@ async function callServerProxyAi({
     extractedPhotoText: data.extractedPhotoText || ocrText || '', visionEngineLabel: data.visionEngineLabel || '' };
 }
 
-async function callOpenRouterBrowser(apiKey, model, systemPrompt, messages, images, onStatus, signal) {
+async function callOpenRouterBrowser(apiKey, model, systemPrompt, messages, images, onStatus, signal, reasoning = 'off') {
   const result = await requestOpenRouter({ apiKey, model: model || 'openrouter/free',
     messages: [{ role: 'system', content: systemPrompt }, ...withOpenAiImages(messages, images || [])],
-    tutor: systemPrompt.includes('ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА РЕПЕТИТОРА'), signal, onStatus });
+    tutor: systemPrompt.includes('ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА РЕПЕТИТОРА'), signal, onStatus, reasoningEffort: reasoningInfo('openrouter', model, reasoning).native ? reasoning : undefined });
   return { ...result, text: normalizeLatex(result.text) };
 }
 
-async function callGeminiBrowser(apiKey, model, systemPrompt, messages, imageB64, onStatus, signal) {
+async function callGeminiBrowser(apiKey, model, systemPrompt, messages, imageB64, onStatus, signal, reasoning = 'off') {
   const contents = messages.map((m, idx) => {
     const role = m.role === 'assistant' ? 'model' : 'user';
     const parts = [];
@@ -293,16 +300,16 @@ async function callGeminiBrowser(apiKey, model, systemPrompt, messages, imageB64
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: systemPrompt }] },
             contents,
-            generationConfig: { temperature: 0.35, maxOutputTokens: systemPrompt.includes('ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА РЕПЕТИТОРА') ? 1500 : 4096 },
+            generationConfig: { temperature: 0.35, maxOutputTokens: systemPrompt.includes('ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА РЕПЕТИТОРА') ? 1500 : 4096, ...geminiThinkingConfig(cand, reasoning, systemPrompt.includes('ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА РЕПЕТИТОРА')) },
           }),
         },
-        22000,
+        reasoning !== 'off' ? 120000 : 22000,
         signal
       );
       if (res.ok) {
         const data = await res.json();
         const partsOut = data?.candidates?.[0]?.content?.parts || [];
-        const txt = partsOut.map((p) => p.text || '').join('');
+        const txt = partsOut.filter((p) => !p.thought).map((p) => p.text || '').join('');
         if (txt.trim()) {
           return { text: normalizeLatex(txt), used: `Google Gemini (${cand})` };
         }
@@ -364,7 +371,7 @@ function photoBlob(dataUri) {
 }
 
 /**
- * Gateway 0: Official Qwen3.5-Omni Cloud API on non-Cloudflare AWS (~4-7s, unlimited, zero 45s limit!)
+ * Gateway 0: Public Qwen3.5-Omni demo. Availability, model version and quotas are external.
  */
 async function callQwen35OmniGateway(systemPrompt, messages, signal, imageB64 = null) {
   const { signal: linkedSignal, cleanup } = linkAbortSignals(signal, 19000);
@@ -463,7 +470,7 @@ async function callPollinationsGateway(systemPrompt, messages, signal) {
 
 /**
  * Gateway B: Non-Cloudflare AWS Qwen2.5-VL-7B-Instruct (/qwen_vl_inference, 17s strict timeout).
- * Bypasses Cloudflare 16KB throttling on Russian ISPs completely!
+ * Network reachability depends on the device and provider; no bypass guarantee.
  */
 async function callQwenAwsGateway(systemPrompt, messages, signal, imageB64 = null) {
   const { signal: linkedSignal, cleanup } = linkAbortSignals(signal, 17500);
@@ -703,6 +710,8 @@ export function getPhotoCapability({ provider = 'builtin', model, customVision =
   return { maxImages: ['auto', 'qwen-3.5', 'qwen-2.5-vl', '', undefined].includes(model) ? 1 : 0 };
 }
 
+function modelForReasoning(options) { return options.model || (options.provider === 'gemini' ? 'gemini-2.5-flash' : options.provider === 'openrouter' ? 'openrouter/free' : 'auto'); }
+
 export async function generateAiBrowser(options) {
   assertAiAllowed();
   const locked = isTutorModeEnabled();
@@ -726,15 +735,24 @@ export async function generateAiBrowser(options) {
     // Keep the original task plus the three most recent exchanges, not an ever-growing transcript.
     const messages = tutorOnly && normalized.length > 7 ? [normalized[0], ...normalized.slice(-6)] : normalized;
     if (!messages.length) throw new Error('Сообщение пустое.');
+    const reasoning = normalizeReasoning(options.reasoning);
+    let effectivePrompt = tutorOnly ? buildTutorSystemPrompt({ grade: options.fallbackMeta?.grade,
+      subject: SUBJECT_NAMES[options.fallbackMeta?.subject] || options.fallbackMeta?.subject }) : String(options.systemPrompt || '');
+    if (options.siteHelp === true) effectivePrompt = buildSiteHelpPrompt(messages.at(-1)?.content || '', { role: getCurrentAccount()?.role, page: options.helpPage, cloudMode: cloudConfigured(), tutorOnly });
+    if (options.graphics) effectivePrompt += '\n' + GRAPHIC_ANSWER_PROMPT;
+    effectivePrompt += reasoningPrompt(reasoning);
+    const sources = options.webSearch ? await runWebSearch(options.searchQuery, { signal: controller.signal, onStatus: options.onStatus, tutorOnly }) : null;
+    if (sources) effectivePrompt += searchContext(sources);
     const result = await generateAiRequest({
-      ...options, provider, messages, tutorOnly,
-      systemPrompt: tutorOnly ? buildTutorSystemPrompt({
-        grade: options.fallbackMeta?.grade,
-        subject: SUBJECT_NAMES[options.fallbackMeta?.subject] || options.fallbackMeta?.subject,
-      }) : options.systemPrompt,
-      fallbackMode: tutorOnly ? 'tutor' : options.fallbackMode,
-      signal: controller.signal,
+      ...options, provider, messages, tutorOnly, reasoning, systemPrompt: effectivePrompt,
+      allowLocalFallback: sources ? false : options.allowLocalFallback,
+      fallbackMode: tutorOnly ? 'tutor' : options.fallbackMode, signal: controller.signal,
     });
+    if (sources) result.text += searchFooter(sources);
+    if (reasoning !== 'off') {
+      const local = /^(Локальн|Автономн)/.test(result.used || '');
+      result.used += local ? ' · уровень рассуждения ИИ не применялся' : ` · Рассуждение: ${reasoningInfo(provider, modelForReasoning(options), reasoning).label} (${({low:'низкий',medium:'средний',high:'высокий'})[reasoning]})`;
+    }
     throwIfUserAborted(controller.signal);
     options.onStatus?.({ stage: 'format', message: 'Ответ получен. Обрабатываем результат…' });
     return result;
@@ -748,7 +766,7 @@ export async function generateAiBrowser(options) {
 async function generateAiRequest({
   provider, apiKey, model, customBaseUrl, customTransport = 'direct', customVision = false,
   systemPrompt, messages, imageB64, images, photoMode = 'auto', ocrText, onStatus,
-  fallbackMode = 'solve', fallbackMeta = {}, tutorOnly = false, allowLocalFallback = true, signal,
+  siteHelp = false, fallbackMode = 'solve', fallbackMeta = {}, tutorOnly = false, allowLocalFallback = true, reasoning = 'off', graphics = false, signal,
 }) {
   throwIfUserAborted(signal);
   const key = (apiKey || '').trim();
@@ -790,7 +808,7 @@ async function generateAiRequest({
   const finish = (out) => ({ ...out, extractedPhotoText: resolvedOcrText, visionEngineLabel,
     photoInputUsed, photoCount: photos.length });
 
-  if (canUseServerProxy() && (provider !== 'custom' || customTransport === 'server')) {
+  if (!siteHelp && canUseServerProxy() && (provider !== 'custom' || customTransport === 'server')) {
     onStatus?.({ stage: 'cloud', photoInputUsed, message: provider === 'custom'
       ? 'Ollama через ваш Python-сервер. Первая загрузка модели может занять до двух минут…'
       : provider === 'builtin' && getPublicDemo(model) ? `${getPublicDemo(model).name}: очередь и генерация через сервер, до 5 минут…`
@@ -798,7 +816,7 @@ async function generateAiRequest({
     try {
       const out = await callServerProxyAi({ provider, apiKey: key, model, systemPrompt, messages,
         images: nativePhotos, ocrText: resolvedOcrText, photoMode: nativePhotos.length ? 'vision' : 'ocr', purpose,
-        customVision, tutorOnly, tutorGrade: fallbackMeta.grade, tutorSubject: fallbackMeta.subject, signal });
+        customVision, tutorOnly, tutorGrade: fallbackMeta.grade, tutorSubject: fallbackMeta.subject, reasoning, graphics, signal });
       return finish(out);
     } catch (error) {
       throwIfUserAborted(signal);
@@ -813,8 +831,8 @@ async function generateAiRequest({
     }
   }
   let out;
-  if (provider === 'openrouter') out = await callOpenRouterBrowser(key, model || 'openrouter/free', systemPrompt, workingMsgs, nativePhotos, onStatus, signal);
-  else if (provider === 'gemini') out = await callGeminiBrowser(key, model || 'gemini-2.5-flash', systemPrompt, workingMsgs, nativePhotos, onStatus, signal);
+  if (provider === 'openrouter') out = await callOpenRouterBrowser(key, model || 'openrouter/free', systemPrompt, workingMsgs, nativePhotos, onStatus, signal, reasoning);
+  else if (provider === 'gemini') out = await callGeminiBrowser(key, model || 'gemini-2.5-flash', systemPrompt, workingMsgs, nativePhotos, onStatus, signal, reasoning);
   else if (provider === 'custom') out = await callCustomLocalBrowser(customBaseUrl, key, model, systemPrompt, workingMsgs, nativePhotos, onStatus, signal);
   else out = await callBuiltinFreeBrowser(systemPrompt, workingMsgs, onStatus, fallbackMode,
     { ...fallbackMeta, draftText: (fallbackMeta.draftText || '') + (resolvedOcrText ? `\n${resolvedOcrText}` : '') },

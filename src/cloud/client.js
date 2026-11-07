@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 let client; let config;
-export function validateCloudConfig(raw) {
+export function validateCloudConfig(raw, currentLocation = globalThis.location) {
   if (!raw || typeof raw !== 'object' || Object.keys(raw).some((key) => !['url','publishableKey','siteUrl','captchaSiteKey'].includes(key))) throw new Error('Некорректная публичная конфигурация облака.');
   const url = new URL(raw.url);
   if (url.protocol !== 'https:' || !/^[a-z0-9-]+\.supabase\.co$/.test(url.hostname) || url.username || url.password || url.search || url.hash || !['','/'].includes(url.pathname)) throw new Error('Нужен HTTPS-адрес проекта Supabase.');
@@ -10,8 +10,9 @@ export function validateCloudConfig(raw) {
     try { isPublic = JSON.parse(atob(key.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).role === 'anon' && key.split('.').length === 3; } catch { /* not a public JWT */ }
   }
   if (!isPublic) throw new Error('В HTML разрешён только publishable / anon ключ, никогда service_role или secret.');
-  const site = new URL(raw.siteUrl);
-  if (site.protocol !== 'https:' || site.username || site.password || site.search || site.hash || site.hostname.endsWith('.github.io')) throw new Error('Укажите HTTPS-адрес облачного сайта (не GitHub Pages).');
+  if (raw.siteUrl === 'auto' && currentLocation?.protocol !== 'https:') throw new Error('Облачная сборка с автоматическим адресом работает только на HTTPS-сайте. Не открывайте её как локальный HTML.');
+  const site = new URL(raw.siteUrl === 'auto' ? currentLocation.origin + '/' : raw.siteUrl);
+  if (site.protocol !== 'https:' || site.username || site.password || site.search || site.hash || site.hostname.endsWith('.github.io') || ['github.io','localhost','127.0.0.1','[::1]'].includes(site.hostname)) throw new Error('Укажите HTTPS-адрес облачного сайта (не GitHub Pages).');
   return Object.freeze({ url: url.origin, publishableKey: key, siteUrl: site.href, captchaSiteKey: String(raw.captchaSiteKey || '') });
 }
 export function getCloudConfig() {

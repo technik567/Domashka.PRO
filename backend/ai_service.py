@@ -1,3 +1,5 @@
+
+from backend.ai_features import normalize_reasoning, feature_prompt, gemini_thinking_config
 from pathlib import Path
 import base64
 import json
@@ -393,6 +395,7 @@ def _call_openrouter(
     system_prompt: str,
     messages: List[Dict[str, Any]],
     image_b64: Optional[str] = None,
+    reasoning: str = "off",
 ) -> Tuple[str, str]:
     photos = image_b64 if isinstance(image_b64, list) else ([image_b64] if image_b64 else [])
     or_messages = openai_messages(system_prompt, messages, photos)
@@ -415,6 +418,9 @@ def _call_openrouter(
                 "temperature": 0.35,
                 "max_tokens": 1600 if "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА РЕПЕТИТОРА" in system_prompt else 6000,
             }
+            if normalize_reasoning(reasoning) != 'off':
+                payload['reasoning'] = {'effort': reasoning, 'exclude': True}
+                payload['max_tokens'] = 10000 if 'ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА РЕПЕТИТОРА' in system_prompt else 16000
             r = httpx.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers=headers,
@@ -460,6 +466,7 @@ def _call_gemini(
     system_prompt: str,
     messages: List[Dict[str, Any]],
     image_b64: Optional[str] = None,
+    reasoning: str = "off",
 ) -> Tuple[str, str]:
     photos = image_b64 if isinstance(image_b64, list) else ([image_b64] if image_b64 else [])
     contents = []
@@ -491,14 +498,15 @@ def _call_gemini(
                 "maxOutputTokens": 1500 if "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА РЕПЕТИТОРА" in system_prompt else 4096,
             },
         }
+        payload['generationConfig'].update(gemini_thinking_config(cand, reasoning, "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА РЕПЕТИТОРА" in system_prompt))
         try:
-            r = httpx.post(url, json=payload, timeout=26.0)
+            r = httpx.post(url, json=payload, timeout=120.0 if reasoning != 'off' else 26.0)
             if r.status_code == 200:
                 data = r.json()
                 cands = data.get("candidates") or []
                 if cands:
                     parts_out = (cands[0].get("content") or {}).get("parts") or []
-                    text_out = "".join(p.get("text", "") for p in parts_out if "text" in p)
+                    text_out = "".join(p.get("text", "") for p in parts_out if "text" in p and not p.get("thought"))
                     if text_out.strip():
                         return _normalize_latex_delimiters(text_out), f"Google Gemini ({cand})"
                 last_err = "Модель вернула пустой ответ"
@@ -856,7 +864,7 @@ def generate_ai_response(
     provider: str, api_key: str, model: str, system_prompt: str, messages: List[Dict[str, Any]],
     image_b64: Optional[str] = None, ocr_text: str = "", purpose: str = "solve",
     tutor_only: bool = False, tutor_grade: int = 8, tutor_subject: str = "auto",
-    vision_capable: Optional[bool] = None, images: Optional[List[str]] = None, photo_mode: str = "auto",
+    vision_capable: Optional[bool] = None, images: Optional[List[str]] = None, photo_mode: str = "auto", reasoning: str = "off", graphics: bool = False, reasoning_native: bool = False,
 ) -> Tuple[str, str]:
     if provider not in ("builtin", "openrouter", "gemini", "custom"):
         raise ValueError("Неизвестный провайдер ИИ")
@@ -866,6 +874,9 @@ def generate_ai_response(
         ollama_service.configured_endpoint()  # opt-in before any OCR / network work
     if tutor_only:
         system_prompt = build_tutor_system_prompt(tutor_grade, tutor_subject)
+    reasoning = normalize_reasoning(reasoning)
+    if tutor_only or not system_prompt.endswith(feature_prompt(reasoning, graphics)):
+        system_prompt += feature_prompt(reasoning, graphics)
     messages = [{"role": m["role"], "content": str(m.get("content", ""))} for m in messages
                 if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
     if not messages:
@@ -885,9 +896,9 @@ def generate_ai_response(
     # Keep the old single-photo API compatible while supporting multiple images.
     image_arg = native_photos if len(native_photos) > 1 else (native_photos[0] if native_photos else None)
     if provider == "openrouter":
-        ans, used = _call_openrouter(api_key.strip(), model or "openrouter/free", system_prompt, working_msgs, image_arg)
+        ans, used = _call_openrouter(api_key.strip(), model or "openrouter/free", system_prompt, working_msgs, image_arg, reasoning=reasoning if reasoning_native else "off")
     elif provider == "gemini":
-        ans, used = _call_gemini(api_key.strip(), model or "gemini-2.5-flash", system_prompt, working_msgs, image_arg)
+        ans, used = _call_gemini(api_key.strip(), model or "gemini-2.5-flash", system_prompt, working_msgs, image_arg, reasoning=reasoning)
     elif provider == "custom":
         ans, used = ollama_service.complete(model, openai_messages(system_prompt, working_msgs, native_photos), tutor_only)
     else:

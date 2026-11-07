@@ -95,7 +95,7 @@ async function expectOk(response, signal) {
   throw publicDemoError(response.status, detail);
 }
 
-async function smallJson(response, signal) {
+export async function readPublicDemoJson(response, signal) {
   await expectOk(response, signal);
   const text = await smallBody(response, signal);
   try { return JSON.parse(text); } catch { throw publicDemoError(0, text); }
@@ -103,7 +103,7 @@ async function smallJson(response, signal) {
 
 // Full snapshots, not token deltas: never concatenate successive responses.
 // Only an explicit complete event with a non-empty first output is successful.
-export async function readPublicDemoStream(response, signal, onStatus) {
+export async function readPublicDemoStream(response, signal, onStatus, extract = (data) => data?.[0]) {
   await expectOk(response, signal);
   if (!response.headers?.get('content-type')?.includes('text/event-stream')) {
     throw publicDemoError(0, await smallBody(response, signal));
@@ -126,11 +126,12 @@ export async function readPublicDemoStream(response, signal, onStatus) {
     if (!['generating', 'complete'].includes(kind)) return;
     let data;
     try { data = JSON.parse(raw); } catch { throw new PublicDemoError('protocol'); }
-    if (!Array.isArray(data) || typeof data[0] !== 'string') throw new PublicDemoError('protocol');
+    const snapshot = Array.isArray(data) ? extract(data) : null;
+    if (typeof snapshot !== 'string') throw new PublicDemoError('protocol');
     if (kind === 'generating') {
       if (!announced) { onStatus?.({ stage: 'thinking', message: 'Публичное демо формирует ответ…' }); announced = true; }
     } else {
-      answer = data[0]; complete = true;
+      answer = snapshot; complete = true;
     }
   }
   await consumeBody(response, signal, PUBLIC_DEMO_LIMITS.response, (text, final) => {
@@ -178,7 +179,7 @@ export async function callPublicDemo({ model: id, systemPrompt, messages: conver
       const photo = photoBlob(imageB64);
       const form = new FormData(); form.append('files', photo.blob, photo.name);
       onStatus?.({ stage: 'cloud', message: `Передаём одно фото в ${model.name}, без OCR…` });
-      const uploaded = await smallJson(await request(`${model.host}/gradio_api/upload`, { method: 'POST', body: form }), signal);
+      const uploaded = await readPublicDemoJson(await request(`${model.host}/gradio_api/upload`, { method: 'POST', body: form }), signal);
       const path = Array.isArray(uploaded) && uploaded.length === 1 ? uploaded[0] : null;
       if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || path.length > 2048 || path.split('/').includes('..') || /[\r\n\u0000]/.test(path)) throw new PublicDemoError('protocol');
       files.push({ path, orig_name: photo.name, mime_type: photo.mime, meta: { _type: 'gradio.FileData' } });
@@ -187,7 +188,7 @@ export async function callPublicDemo({ model: id, systemPrompt, messages: conver
     const session = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
     const base = `${model.host}/gradio_api/call/${model.apiName}`;
     onStatus?.({ stage: 'cloud', message: `${model.name}: очередь и генерация могут занять до 5 минут. «Остановить» отменяет ожидание.` });
-    const submitted = await smallJson(await request(base, {
+    const submitted = await readPublicDemoJson(await request(base, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data, session_hash: session }),
     }), signal);
     if (!submitted || typeof submitted.event_id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(submitted.event_id)) throw publicDemoError(0, JSON.stringify(submitted));

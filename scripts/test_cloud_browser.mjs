@@ -61,6 +61,7 @@ async function backend(req) {
   if (address.pathname.startsWith('/rest/v1/rpc/')) {
     const name = address.pathname.split('/').at(-1); const data = await rpc(actor,name,body || {});
     if (name === 'domashka_begin_card') latestAttempt = data.id;
+    if (process.env.QA_DEBUG && ['domashka_sync_status','domashka_save_document'].includes(name)) console.log('RPC',actor.session,name,JSON.stringify(body),JSON.stringify(data));
     return {json:data};
   }
   if (address.pathname.startsWith('/rest/v1/')) {
@@ -79,7 +80,9 @@ async function backend(req) {
     const limit = Math.min(500,Math.max(0,Number(address.searchParams.get('limit') || 500)));
     const offset = Math.max(0,Number(address.searchParams.get('offset') || 0));
     const query = `select ${cols} from public.${table}${conditions.length ? ' where '+conditions.join(' and ') : ''} order by ${order} limit ${limit} offset ${offset}`;
-    return {json:(await as(actor,() => db.query(query,params))).rows};
+    const rows=(await as(actor,() => db.query(query,params))).rows;
+    if (process.env.QA_DEBUG) console.log('SELECT',actor.session,address.searchParams.toString(),JSON.stringify(rows));
+    return {json:rows};
   }
   if (address.pathname.startsWith('/storage/v1/object/')) {
     const object = decodeURIComponent(address.pathname.replace(/^\/storage\/v1\/object\/(authenticated\/)?domashka-photos\//,''));
@@ -110,23 +113,30 @@ async function context(options = {}) {
 }
 async function login(state, base, name) {
   const page = await state.ctx.newPage(); await page.goto(base);
+  await page.getByRole('button',{name:'Позже',exact:true}).click();
   await page.getByLabel('Почта родителя или полный логин ребёнка').fill(name);
   await page.getByLabel('Пароль',{exact:true}).fill(password);
   await page.getByRole('form',{name:'Облачный вход'}).getByRole('button',{name:'Войти',exact:true}).click();
-  await page.getByRole('button',{name:'Дневник',exact:true}).waitFor(); return page;
+  await page.getByRole('button',{name:'Дневник',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Позже',exact:true}).click(); return page;
 }
 const status = (page) => page.getByRole('complementary',{name:'Синхронизация аккаунта'});
 async function sync(page) { await status(page).getByRole('button',{name:'Синхронизировать',exact:true}).click(); }
 async function saved(page) { await status(page).getByText('Сохранено в облаке',{exact:true}).waitFor(); }
 async function diary(page) { await page.getByRole('button',{name:'Дневник',exact:true}).click(); }
-async function addTask(page,text) { await page.getByPlaceholder('Что задали?',{exact:false}).fill(text); await page.getByRole('button',{name:'Добавить',exact:true}).click(); }
+async function addTask(page,text, online = true) {
+  // Do not read a pre-click 'saved' label before React's persistence effect.
+  const receipt = online ? page.waitForResponse((response) => response.url().endsWith('/rpc/domashka_save_document') && response.request().postDataJSON()?.doc_key === 'pref/domashka_diary_tasks_v21' && String(response.request().postDataJSON()?.doc_value).includes(text) && response.ok()) : null;
+  await page.getByPlaceholder('Что задали?',{exact:false}).fill(text); await page.getByRole('button',{name:'Добавить',exact:true}).click();
+  if (receipt) await receipt;
+}
 async function reloadIncoming(page) { await status(page).getByRole('button',{name:'Обновить экран',exact:true}).click(); await page.getByRole('button',{name:'Дневник',exact:true}).waitFor(); }
 async function cache(page) { return page.evaluate(() => new Promise((resolve,reject) => {
   const req=indexedDB.open('domashka_cloud_cache_v42',1); req.onerror=()=>reject(req.error);
   req.onsuccess=()=>{const db=req.result;const tx=db.transaction('workspaces');const r=tx.objectStore('workspaces').getAll();r.onsuccess=()=>{resolve(r.result);db.close();};r.onerror=()=>reject(r.error);};
 })); }
 try {
-  await db.exec(`create role anon; create role authenticated; create schema auth; create schema storage;
+  await db.exec(`create role anon; create role authenticated; create role service_role; create schema auth; create schema storage;
     create table auth.users(id uuid primary key,email text,encrypted_password text default '',email_confirmed_at timestamptz,raw_app_meta_data jsonb default '{}',raw_user_meta_data jsonb default '{}');
     create table auth.sessions(id uuid primary key,user_id uuid,created_at timestamptz default now());
     create function auth.uid() returns uuid language sql as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
@@ -162,7 +172,7 @@ try {
   ok(await b.getByText('Общее задание с компьютера',{exact:true}).count()===0,'remote data is staged, not silently written into mounted editor');
   await reloadIncoming(b); await diary(b);
   ok(await b.getByText('Общее задание с компьютера',{exact:true}).isVisible(),'saved diary appears after explicit refresh on second context');
-  mobile.offline=true; await addTask(b,'Телефон: несохранённая локальная версия');
+  mobile.offline=true; await addTask(b,'Телефон: несохранённая локальная версия',false);
   await status(b).getByRole('button',{name:'Скачать резервную копию изменений'}).waitFor();
   // Wait for actual IDB completion, not an arbitrary sleep.
   await b.waitForFunction(async()=>{const db=await new Promise(r=>{const q=indexedDB.open('domashka_cloud_cache_v42');q.onsuccess=()=>r(q.result);});const rows=await new Promise(r=>{const q=db.transaction('workspaces').objectStore('workspaces').getAll();q.onsuccess=()=>r(q.result);});db.close();return rows.some(r=>JSON.stringify(r.pending).includes('Телефон: несохранённая'));});
@@ -222,6 +232,7 @@ try {
   await b.screenshot({path:'.cache/browser-cloud-mobile.png',fullPage:true});
   ok(await b.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'390px mobile viewport has no horizontal page overflow');
   const local=await context(); const localPage=await local.ctx.newPage(); await localPage.goto(base+'Domashka_PRO.html');
+  await localPage.getByRole('button',{name:'Позже',exact:true}).click();
   await localPage.getByRole('button',{name:'Настроить',exact:true}).click();
   await localPage.getByRole('heading',{name:'Сначала — аккаунт родителя',exact:true}).waitFor();
   ok(!await localPage.getByLabel('Почта родителя или полный логин ребёнка').count(),'downloadable HTML still opens local family registration, not cloud Auth');
@@ -229,6 +240,7 @@ try {
   const fileState=await context({viewport:{width:320,height:760}});
   await fileState.ctx.addInitScript(()=>{Object.defineProperty(crypto,'randomUUID',{value:undefined,configurable:true});});
   const filePage=await fileState.ctx.newPage(); await filePage.goto(pathToFileURL(path.join(root,'Domashka_PRO.html')).href);
+  await filePage.getByRole('button',{name:'Позже',exact:true}).click();
   await filePage.locator('#chat-builtin-model').waitFor();
   const options=await filePage.locator('#chat-builtin-model option').allTextContents();
   ok(options.length===9 && options.some(t=>t.includes('Gemma')) && options.some(t=>t.includes('Meta')) && options.some(t=>t.includes('Mistral')),'file HTML preserves eight free models plus auto without external requests');

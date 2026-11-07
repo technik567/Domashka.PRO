@@ -25,3 +25,7 @@ secure_password_change = true
 [functions.family-admin]
 # The function performs getUser() AND server-side session/family checks itself.
 verify_jwt = false
+
+[functions.web-search]
+# Internal Auth.getUser plus service-only reservation RPC checks the real actor.
+verify_jwt = false
