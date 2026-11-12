@@ -41,8 +41,8 @@ Deno.serve(async (request: Request) => {
     if (familyError || family?.account?.role !== 'parent' || family.account.id !== identity.user.id)
       return reply(403, { error: 'Требуется действующий родительский аккаунт.' });
     const password = body.password;
-    if (typeof password !== 'string' || password.trim().length < 8 || password.length > 128)
-      return reply(400, { error: 'Новый пароль: 8–128 символов, не только пробелы.' });
+    if (typeof password !== 'string' || password.trim().length < 8 || new TextEncoder().encode(password).length > 72)
+      return reply(400, { error: 'Новый пароль: минимум 8 символов, максимум 72 байта UTF-8 (до 72 латинских символов), не только пробелы.' });
     const admin = createClient(url, serviceKey, clientOptions);
     if (body.action === 'create_child') {
       const login = String(body.login || '').trim().toLowerCase(); const name = String(body.name || '').trim();

@@ -249,11 +249,13 @@ export class CloudRuntime {
   }
   async createAccount(data) {
     if (data.role !== 'child') throw new Error('Другой родитель регистрируется со своим логином и вводит код привязки.');
+    checkNewPassword(data.password);
     const created = await this.admin({ action: 'create_child', login: data.login, password: data.password, name: data.name,
       avatar: data.avatar, grade: Number(data.grade), age: Number(data.age) });
     return this.family.children.find((child) => child.id === created.id) || created;
   }
   async resetChildPassword(id, parentPassword, password, captchaToken) {
+    checkNewPassword(password);
     await this.admin({ action: 'reset_child', childId: id, parentPassword, password, captchaToken });
   }
   async backupStatus() { return this.rpc('domashka_backup_status'); }

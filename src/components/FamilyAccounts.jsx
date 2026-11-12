@@ -87,6 +87,7 @@ function Registration({ first = false, onCreated }) {
       <label className="text-xs font-semibold">Новый пароль<input className={field} type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} maxLength={128} autoComplete="new-password" /></label>
       <label className="text-xs font-semibold">Повторите пароль<input className={field} type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required minLength={8} maxLength={128} autoComplete="new-password" /></label>
     </div>
+    {cloudConfigured() && <p className="text-xs text-slate-500">Облачный пароль: минимум 8 символов, максимум 72 байта UTF-8 (до 72 латинских символов).</p>}
     <AvatarPicker value={avatar} onChange={setAvatar} />
     {role === 'child' ? <GradeAge grade={grade} age={age} onGrade={setGrade} onAge={setAge} /> : <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 space-y-2">
       <label className="block text-sm font-bold">Вопрос для родителя: √{challenge?.square || '…'} = ?<input type="text" inputMode="numeric" className={field} value={answer} onChange={(e) => setAnswer(e.target.value)} required autoComplete="off" aria-label="Ответ на вопрос для родителя" /></label>
@@ -161,6 +162,7 @@ function PersonalSettings({ account }) {
     }}>
       <label className="block text-xs font-semibold">Текущий пароль<input type="password" className={field} value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" required /></label>
       <div className="grid sm:grid-cols-2 gap-3"><label className="text-xs font-semibold">Новый пароль<input type="password" className={field} value={next} onChange={(e) => setNext(e.target.value)} minLength={8} maxLength={128} autoComplete="new-password" required /></label><label className="text-xs font-semibold">Повтор нового пароля<input type="password" className={field} value={confirm} onChange={(e) => setConfirm(e.target.value)} minLength={8} maxLength={128} autoComplete="new-password" required /></label></div>
+      {cloudConfigured() && <p className="text-xs text-slate-500">Облачный пароль: минимум 8 символов, максимум 72 байта UTF-8 (до 72 латинских символов).</p>}
       {cloudConfigured() && <CloudCaptcha onToken={setCaptcha} reset={captchaReset} />}
       <button className={primary} disabled={busy}>{busy ? 'Меняем пароль…' : 'Сменить мой пароль'}</button>
     </form>
@@ -207,6 +209,7 @@ function ChildSettings({ child, parents }) {
       <label className="block text-xs font-semibold">Ваш родительский пароль<input type="password" className={field} value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} required autoComplete="current-password" /></label>
       <label className="block text-xs font-semibold">Новый пароль ребёнка<input type="password" className={field} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} maxLength={128} required autoComplete="new-password" /></label>
       <label className="block text-xs font-semibold">Повтор пароля ребёнка<input type="password" className={field} value={confirm} onChange={(e) => setConfirm(e.target.value)} minLength={8} maxLength={128} required autoComplete="new-password" /></label>
+      {cloudConfigured() && <p className="text-xs text-slate-500">Облачный пароль: минимум 8 символов, максимум 72 байта UTF-8 (до 72 латинских символов).</p>}
       {cloudConfigured() && <CloudCaptcha onToken={setCaptcha} reset={captchaReset} />}
       <button className={primary} disabled={busy}>Сменить пароль ребёнка</button>
     </form>

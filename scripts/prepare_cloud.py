@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Cloudflare Pages files from the standalone HTML + PUBLIC environment.
+"""Build Cloudflare static assets (Workers/Pages) from the standalone HTML + PUBLIC environment.
 
 No Supabase admin key or SMTP credential belongs in this build. The original
 tracked/downloadable HTML stays local and is copied unmodified for download.
@@ -41,7 +41,7 @@ def public_config(environ=None):
     host = urlsplit(site)
     if site != 'auto' and (host.scheme != 'https' or not host.hostname or host.username or host.password or host.query or host.fragment
             or host.hostname.endswith('.github.io') or host.hostname in ('github.io', 'localhost', '127.0.0.1', '::1')):
-        raise ValueError('DOMASHKA_SITE_URL: нужен публичный HTTPS-адрес Cloudflare Pages/своего сайта, не GitHub Pages.')
+        raise ValueError('DOMASHKA_SITE_URL: нужен публичный HTTPS-адрес Cloudflare Workers/Pages/своего сайта, не GitHub Pages.')
     if captcha and not re.fullmatch(r'[A-Za-z0-9_-]{10,200}', captcha):
         raise ValueError('DOMASHKA_TURNSTILE_SITE_KEY: нужен публичный site key, не секрет CAPTCHA.')
     return {'url': url, 'publishableKey': key, 'siteUrl': site, 'captchaSiteKey': captcha}
@@ -84,7 +84,7 @@ def prepare_cloud(output_dir, source_file=ROOT / 'Domashka_PRO.html', environ=No
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--zip', type=Path, help='ZIP для прямой загрузки в Cloudflare Pages (не локальный Portable ZIP).')
+    parser.add_argument('--zip', type=Path, help='ZIP для загрузки статических файлов в Cloudflare Workers/Pages (не локальный Portable ZIP).')
     parser.add_argument('--output', type=Path, default=ROOT / '.cache' / 'cloud-site')
     args = parser.parse_args()
     output = prepare_cloud(args.output)
@@ -94,9 +94,9 @@ def main():
                 file = output / relative
                 if file.is_file():
                     package.write(file, arcname=file.relative_to(output))
-        print(f'Пакет Cloudflare Pages: {args.zip}')
+        print(f'Пакет Cloudflare static assets: {args.zip}')
     print(f'Облачная статическая сборка готова: {output}')
-    print('Это НЕ deployment и НЕ проверка Supabase/Turnstile. Загрузите папку в Cloudflare Pages после серверной настройки.')
+    print('Это НЕ deployment и НЕ проверка Supabase/Turnstile. Загрузите файлы в свой Cloudflare Workers/Pages-проект после серверной настройки.')
 
 
 if __name__ == '__main__':
