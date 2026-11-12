@@ -50,17 +50,18 @@ export function getCloudClient() {
 export function loginEmail(value) {
   const login = String(value || '').trim().toLowerCase();
   if (login.includes('@')) {
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(login) || login.endsWith('@children.domashka.invalid')) throw new Error('Введите почту родителя или полный логин ребёнка без @.');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(login) || login.endsWith('.invalid')) throw new Error('Введите логин родителя или полный логин ребёнка, а не технический адрес.');
     return login;
   }
-  if (!/^[a-z0-9_-]{3,24}\.[a-f0-9]{12}$/.test(login)) throw new Error('Нужен полный логин ребёнка из семейного кабинета, включая часть после точки.');
+  if (/^[a-z0-9_-]{3,24}$/.test(login)) return `${login}@parents.domashka.invalid`;
+  if (!/^[a-z0-9_-]{3,24}\.[a-f0-9]{12}$/.test(login)) throw new Error('Введите логин родителя (3–24 латинских символа) или полный логин ребёнка с частью после точки.');
   return `${login}@children.domashka.invalid`;
 }
 export function cloudError(error) {
   if (error?.code === '40001') return new Error('Версия уже изменена. Ваш черновик остался на экране: сравните данные и обновите версию перед сохранением.');
   if (error?.code === '42501') return new Error('Недостаточно прав или сеанс завершён. Войдите заново; для ученика проверьте ограничения родителя.');
   if (error?.code === 'PGRST202' || error?.code === '42P01') return new Error('Владелец ещё не установил облачную базу этой версии. Обратитесь к нему; локальные данные не удалены.');
-  if (/invalid login credentials/i.test(error?.message || '')) return new Error('Неверная почта/логин или пароль.');
+  if (/invalid login credentials/i.test(error?.message || '')) return new Error('Неверный логин или пароль.');
   if (/email not confirmed/i.test(error?.message || '')) return new Error('Сначала подтвердите почту по письму.');
   if (/fetch|network|abort|timeout/i.test(error?.message || '') || error?.name === 'AbortError') return new Error('Нет ответа облака. Проверьте интернет и состояние проекта; не очищайте данные сайта.');
   return new Error(String(error?.message || 'Облако не подтвердило операцию. Повторите позже.'));

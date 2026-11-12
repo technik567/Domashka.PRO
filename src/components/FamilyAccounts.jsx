@@ -12,6 +12,7 @@ import CloudRoot, { CloudCaptcha } from './CloudAccess';
 import { cloud, cloudConfigured } from '../cloud/bridge';
 import { BUILTIN_MODELS } from '../standalone/modelCatalog';
 import ModelInfoCard from './ModelInfoCard';
+import CloudRecoverySettings from './CloudRecoverySettings';
 import WorkspaceTransfer from './WorkspaceTransfer';
 
 const field = 'mt-1 w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500';
@@ -246,7 +247,7 @@ export default function FamilyAccounts() {
   if (account.role === 'child') return <div className="space-y-5">
     <div className={`${card} flex gap-3 items-center`}><Avatar value={account.avatar} /><div><h1 className="text-xl font-extrabold">Привет, {account.name}!</h1><p className="text-xs text-slate-500">{account.grade} класс · {account.age} лет · задания и обратная связь от родителей</p></div></div>
     {!account.policy.allowAi && <p className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 text-sm text-amber-800 dark:text-amber-200">ИИ отключён родителем. Можно читать материалы, вести дневник и отправлять выполненную домашку.</p>}
-    <FamilyHomeworkBoard /><PersonalSettings account={account} /><WorkspaceTransfer />
+    <FamilyHomeworkBoard /><PersonalSettings account={account} />{cloudConfigured() && account.role === 'parent' && <CloudRecoverySettings account={account} />}<WorkspaceTransfer />
     <p className="text-xs text-slate-500">Класс, режим обучения и настройки ИИ меняет родитель. Для этого нужно выйти и войти под родительским логином.</p>
   </div>;
   return <div className="space-y-5">
@@ -267,8 +268,8 @@ export default function FamilyAccounts() {
       </> : <div className={`${card} text-sm text-slate-500`}>Здесь появятся задания и настройки выбранного ребёнка.</div>}</div>
     </div>
     <details className={card} open={!children.length}><summary className="font-bold cursor-pointer inline-flex items-center gap-2"><UserPlus className="w-4 h-4" />{cloudConfigured() ? 'Добавить ребёнка' : 'Добавить ребёнка или родителя'}</summary><div className="pt-4"><Registration onCreated={(created) => { if (created.role === 'child') setSelectedId(created.id); }} /></div></details>
-    <PersonalSettings account={account} /><WorkspaceTransfer />
+    <PersonalSettings account={account} />{cloudConfigured() && account.role === 'parent' && <CloudRecoverySettings account={account} />}<WorkspaceTransfer />
     {isLegacyOwner() && <Migration account={account} children={children} />}
-    <p className="text-xs leading-relaxed text-slate-500">{cloudConfigured() ? 'Перед передачей устройства ребёнку выходите. У родителя есть восстановление через почту; пароль ребёнка меняет связанный родитель. Изменения прав защищены сервером, но это не блокировка других сайтов и приложений. API-ключи и неотправленные черновики остаются на устройстве.' : 'После передачи устройства ребёнку выходите из аккаунта. Сеанс длится до 8 часов и закрывается при выходе, блокировке или смене пароля. Сохраните родительский пароль в безопасном месте: восстановления через почту нет. Локальные материалы и настройки не зашифрованы на диске.'}</p>
+    <p className="text-xs leading-relaxed text-slate-500">{cloudConfigured() ? 'Перед передачей устройства ребёнку выходите. У родителя есть 10 одноразовых резервных кодов для восстановления без почты; пароль ребёнка меняет связанный родитель. Изменения прав защищены сервером, но это не блокировка других сайтов и приложений. API-ключи и неотправленные черновики остаются на устройстве.' : 'После передачи устройства ребёнку выходите из аккаунта. Сеанс длится до 8 часов и закрывается при выходе, блокировке или смене пароля. Сохраните родительский пароль в безопасном месте: восстановления через почту нет. Локальные материалы и настройки не зашифрованы на диске.'}</p>
   </div>;
 }

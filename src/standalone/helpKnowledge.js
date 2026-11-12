@@ -5,6 +5,7 @@ export const HELP_SECTIONS = Object.freeze(['solver','family','checker','diary',
 export function redactHelpInput(raw) {
   return String(raw || '').slice(0, 4000)
     .replace(/\b(?:sb_(?:secret|publishable)_[a-z0-9_-]+|tvly-[a-z0-9_-]+|sk-[a-z0-9_-]{8,}|eyJ[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+)\b/gi, '[ключ скрыт]')
+    .replace(/\b[A-F0-9]{8}(?:[-\s]?[A-F0-9]{8}){3}\b/gi, '[резервный код скрыт]')
     .replace(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi, '[почта скрыта]')
     .replace(/((?:пароль|password|token|токен|api.?key|ключ)\s*[:=]\s*)\S+/gi, '$1[скрыто]')
     .replace(/(?:\+?\d[ ()-]*){10,15}/g, '[номер скрыт]');

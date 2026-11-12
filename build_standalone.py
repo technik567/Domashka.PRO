@@ -18,7 +18,7 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(ROOT, "static", "assets")
-DISTRIBUTION_DOCS = ('USER_GUIDE.md', 'REFERENCE_COVERAGE.md', 'docs/CLOUD_SETUP.md', 'docs/CLOUD_LAUNCH.md', 'docs/PUBLIC_DEMOS.md', 'docs/QA_4.2.md', 'docs/QA_4.3.md', 'docs/AI_FEATURES.md')
+DISTRIBUTION_DOCS = ('USER_GUIDE.md', 'REFERENCE_COVERAGE.md', 'docs/CLOUD_SETUP.md', 'docs/CLOUD_LAUNCH.md', 'docs/PUBLIC_DEMOS.md', 'docs/QA_4.2.md', 'docs/QA_4.3.md', 'docs/AI_FEATURES.md', 'docs/AUTH_USERNAME.md')
 
 
 def inline_katex_fonts(css_text: str) -> str:
@@ -161,8 +161,8 @@ OCR передаёт текст, не рисунок. Демо ожидаютс�
 ОБЛАКО И АВТОНОМНЫЙ ФАЙЛ — РАЗНЫЕ РЕЖИМЫ
 Этот скачанный HTML остаётся локальным. Общие аккаунты ПК/телефона работают
 на отдельно настроенном HTTPS-сайте Cloudflare Pages + Supabase.
-Родитель — почта/пароль/восстановление; дети — созданные родителем логины/пароли,
-без собственной почты. Проект, SMTP, CAPTCHA и сайт настраивает владелец.
+Родитель — логин/пароль и 10 одноразовых кодов восстановления; дети — созданные
+родителем логины/пароли. Почта и SMTP не нужны. Облако, CAPTCHA и сайт настраивает владелец.
 Наличие кода не означает публикацию. Не вводите облачные пароли на GitHub Pages.
 «Семья → Перенос и резервная копия учебных данных» выгружает учебные данные,
 не пароли/сеансы/API-ключи. Не удаляйте старый Viewer до проверки переноса.

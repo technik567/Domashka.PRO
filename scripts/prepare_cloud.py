@@ -15,7 +15,7 @@ import zipfile
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
-PUBLIC_DOCS = ('USER_GUIDE.md','USER_GUIDE.txt','REFERENCE_COVERAGE.md','docs/CLOUD_SETUP.md','docs/CLOUD_LAUNCH.md','docs/PUBLIC_DEMOS.md','docs/QA_4.2.md','docs/QA_4.3.md','docs/AI_FEATURES.md')
+PUBLIC_DOCS = ('USER_GUIDE.md','USER_GUIDE.txt','REFERENCE_COVERAGE.md','docs/CLOUD_SETUP.md','docs/CLOUD_LAUNCH.md','docs/PUBLIC_DEMOS.md','docs/QA_4.2.md','docs/QA_4.3.md','docs/AI_FEATURES.md','docs/AUTH_USERNAME.md')
 
 
 def public_config(environ=None):
@@ -96,7 +96,7 @@ def main():
                     package.write(file, arcname=file.relative_to(output))
         print(f'Пакет Cloudflare Pages: {args.zip}')
     print(f'Облачная статическая сборка готова: {output}')
-    print('Это НЕ deployment и НЕ проверка Supabase/почты. Загрузите папку в Cloudflare Pages после серверной настройки.')
+    print('Это НЕ deployment и НЕ проверка Supabase/Turnstile. Загрузите папку в Cloudflare Pages после серверной настройки.')
 
 
 if __name__ == '__main__':

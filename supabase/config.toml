@@ -12,12 +12,12 @@ enabled = true
 # allowlist in the hosted project's Auth settings before opening registration.
 site_url = "http://localhost:5173"
 additional_redirect_urls = []
-enable_signup = true
+enable_signup = false
 enable_anonymous_sign_ins = false
 minimum_password_length = 8
 
 [auth.email]
-enable_signup = true
+enable_signup = false
 double_confirm_changes = true
 enable_confirmations = true
 secure_password_change = true
@@ -28,4 +28,8 @@ verify_jwt = false
 
 [functions.web-search]
 # Internal Auth.getUser plus service-only reservation RPC checks the real actor.
+verify_jwt = false
+
+[functions.account-access]
+# Public endpoints verify CAPTCHA + atomic quotas; rotation verifies Auth/session/password.
 verify_jwt = false

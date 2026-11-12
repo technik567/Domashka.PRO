@@ -53,9 +53,9 @@ Deno.serve(async (request: Request) => {
       const { data: ticket, error: ticketError } = await userClient.rpc('domashka_admin_ticket', { action: 'create_child', child: null, login });
       if (ticketError || typeof ticket !== 'string' || !/^[a-f0-9-]{36}$/.test(ticket)) return reply(403, { error: 'Операция не разрешена или достигнут лимит. Обновите кабинет.' });
       const fullLogin = `${login}.${family.account.familyCode}`;
-      const { data, error } = await admin.auth.admin.createUser({ email: `${fullLogin}@children.domashka.invalid`, password,
+      const { data, error } = await admin.auth.admin.createUser({ id: ticket, email: `${fullLogin}@children.domashka.invalid`, password,
         email_confirm: true,
-        app_metadata: { domashka_role: 'child', domashka_parent: identity.user.id, domashka_login: login, domashka_create_ticket: ticket },
+        app_metadata: { domashka_role: 'child', domashka_parent: identity.user.id, domashka_login: login },
         user_metadata: { name, avatar: body.avatar || '🦊', grade: body.grade, age: body.age } });
       if (error) return reply(400, { error: 'Аккаунт не создан: проверьте данные и занятость логина в вашей семье. После сетевого сбоя обновите список — первая попытка могла уже завершиться.' });
       return reply(200, { id: data.user.id, login: fullLogin });

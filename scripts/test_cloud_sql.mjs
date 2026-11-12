@@ -2,6 +2,7 @@
 // Auth/Storage infrastructure tables and JWT claims are fixtures: this does not
 // certify a deployed GoTrue/SMTP/Storage service. No network, keys or real users.
 import assert from 'node:assert/strict';
+import { testUsernameRecovery } from './test_username_sql.mjs';
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
@@ -244,5 +245,6 @@ try {
   const pcode=(await one('select family_code from public.domashka_profiles where id=$1',[p.id])).family_code;
   await rpc(p,'domashka_rotate_sessions',[p.id]);
   await denied('otherwise-valid unused ticket is rejected after parent session rotation',() => db.query('insert into auth.users(id,email,raw_app_meta_data,raw_user_meta_data) values($1,$2,$3,$4)',[randomUUID(),`delayed.${pcode}@children.domashka.invalid`,{domashka_role:'child',domashka_parent:p.id,domashka_login:'delayed',domashka_create_ticket:delayedTicket},{name:'Delayed',grade:5,age:11}]));
+  await testUsernameRecovery({ db, as, rpc, one, ok, denied });
   console.log(`\nCloud SQL: ${checks} assertions passed. Auth/Storage/SMTP are fixtures, not a live deployment.`);
 } catch (error) { console.error('Cloud SQL FAILED:',error.message,'code:',error.code || 'assertion',error.where || ''); console.error(error.stack?.split('\n').filter((line) => !line.includes('node_modules')).slice(0,5).join('\n')); process.exitCode=1; } finally { await db.close(); }

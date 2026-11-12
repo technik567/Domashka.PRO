@@ -32,7 +32,7 @@ jobs:
         with:
           deno-version: v2.x
       - name: Type-check server-only Edge functions
-        run: deno check --no-config --node-modules-dir=none --frozen --lock=supabase/functions/deno.lock supabase/functions/family-admin/index.ts supabase/functions/web-search/index.ts
+        run: deno check --no-config --node-modules-dir=none --frozen --lock=supabase/functions/deno.lock supabase/functions/family-admin/index.ts supabase/functions/web-search/index.ts supabase/functions/account-access/index.ts
       - name: Build the portable app
         run: npm run build:standalone
       - name: Python and distribution tests

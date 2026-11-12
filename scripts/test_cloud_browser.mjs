@@ -114,7 +114,7 @@ async function context(options = {}) {
 async function login(state, base, name) {
   const page = await state.ctx.newPage(); await page.goto(base);
   await page.getByRole('button',{name:'Позже',exact:true}).click();
-  await page.getByLabel('Почта родителя или полный логин ребёнка').fill(name);
+  await page.getByLabel('Логин родителя или полный логин ребёнка').fill(name);
   await page.getByLabel('Пароль',{exact:true}).fill(password);
   await page.getByRole('form',{name:'Облачный вход'}).getByRole('button',{name:'Войти',exact:true}).click();
   await page.getByRole('button',{name:'Дневник',exact:true}).waitFor();
@@ -235,7 +235,7 @@ try {
   await localPage.getByRole('button',{name:'Позже',exact:true}).click();
   await localPage.getByRole('button',{name:'Настроить',exact:true}).click();
   await localPage.getByRole('heading',{name:'Сначала — аккаунт родителя',exact:true}).waitFor();
-  ok(!await localPage.getByLabel('Почта родителя или полный логин ребёнка').count(),'downloadable HTML still opens local family registration, not cloud Auth');
+  ok(!await localPage.getByLabel('Логин родителя или полный логин ребёнка').count(),'downloadable HTML still opens local family registration, not cloud Auth');
   // Actual file:// entry point, with legacy randomUUID absence (study IDs only).
   const fileState=await context({viewport:{width:320,height:760}});
   await fileState.ctx.addInitScript(()=>{Object.defineProperty(crypto,'randomUUID',{value:undefined,configurable:true});});
