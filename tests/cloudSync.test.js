@@ -139,10 +139,11 @@ describe('cloud configuration and storage boundaries', () => {
     for(const patch of [{publishableKey:'sb_secret_1234567890abcdef'},{serviceRole:'bad'},{url:'https://evil.test'},{siteUrl:'https://school.github.io/app/'}]) expect(() => validateCloudConfig({...valid,...patch})).toThrow();
     const privileged=`e30.${btoa('{"role":"service_role"}')}.signature`; expect(() => validateCloudConfig({...valid,publishableKey:privileged})).toThrow();
   });
-  it('accepts parent email or the full globally unique child login, never a synthetic child email', () => {
+  it('accepts parent usernames, legacy emails and full child logins, never raw internal addresses', () => {
     expect(loginEmail(' Parent@Example.com ')).toBe('parent@example.com');
     expect(loginEmail('anna.012345abcdef')).toBe('anna.012345abcdef@children.domashka.invalid');
-    for(const login of ['anna','child@children.domashka.invalid','a.b','../anna']) expect(() => loginEmail(login)).toThrow();
+    expect(loginEmail(' Anna ')).toBe('anna@parents.domashka.invalid');
+    for(const login of ['ab','child@children.domashka.invalid','anna@parents.domashka.invalid','a.b','../anna']) expect(() => loginEmail(login)).toThrow();
   });
   it('whitelists the nine study preferences, not accounts, secrets, drafts or statistics', () => {
     expect(SYNC_PREFS).toHaveLength(9);

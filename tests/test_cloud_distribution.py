@@ -26,8 +26,15 @@ class CloudDistributionTests(unittest.TestCase):
             source = Path(tmp) / 'Domashka_PRO.html'
             original = '<html><head><script>window.__STANDALONE_BUILD__ = true;</script></head></html>'
             source.write_text(original)
-            site = prepare_cloud(Path(tmp) / 'cloud', source, ENV)
-            self.assertIn('window.__DOMASHKA_CLOUD__ =', (site / 'index.html').read_text())
+            site_key = 'public-turnstile-fixture-123'
+            site = prepare_cloud(Path(tmp) / 'cloud', source, {**ENV,
+                'DOMASHKA_TURNSTILE_SITE_KEY': site_key,
+                'DOMASHKA_TURNSTILE_SECRET_KEY': 'private-captcha-fixture-must-not-be-published'})
+            html = (site / 'index.html').read_text()
+            self.assertIn('window.__DOMASHKA_CLOUD__ =', html)
+            self.assertIn('"captchaSiteKey":"' + site_key + '"', html)
+            self.assertNotIn('private-captcha-fixture-must-not-be-published', html)
+            self.assertNotIn(site_key, (site / 'Domashka_PRO.html').read_text())
             self.assertEqual((site / 'Domashka_PRO.html').read_text(), original)
             self.assertEqual(source.read_text(), original)
             self.assertTrue((site / 'docs/CLOUD_SETUP.md').is_file())
