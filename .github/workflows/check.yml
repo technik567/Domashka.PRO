@@ -48,6 +48,8 @@ jobs:
         run: npm run build:standalone
       - name: Python and distribution tests
         run: python -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Validate existing Worker package (dry run, never deploy)
+        run: npm run check:worker
       - name: Ensure the downloadable HTML matches its sources
         run: git diff --exit-code -- Domashka_PRO.html USER_GUIDE.txt REFERENCE_COVERAGE.md
 
