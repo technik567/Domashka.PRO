@@ -1,4 +1,4 @@
-# Облачная Домашка.ПРО 4.3: настройка владельцем
+# Облачная Домашка.ПРО 4.4: настройка владельцем
 
 **Состояние исходников не равно работающему сервису.** В этой поставке есть миграции, браузерный клиент, серверная функция и проверки. Проект Supabase, Turnstile и публикация Cloudflare должны быть настроены владельцем. Успех локальных тестов не подтверждает работу GoTrue/Storage или синхронизацию реальных устройств.
 
@@ -150,8 +150,8 @@ SQL-прогон исполняет настоящие миграции на Pos
 - https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits
 - Точная формулировка про чувствительные операции: https://github.com/github/docs/blob/main/data/reusables/pages/no_sensitive_data_pages.md
 
-## Дополнения 4.3
+## Дополнения 4.3 / 4.4
 
-Новые проекты применяют все восемь SQL-файлов в порядке имён. В уже подготовленном проекте миграции повторно не выполняют: проверяйте историю. Поиск использует отдельную `web-search` функцию, owner-only Tavily key и ту же точную `DOMASHKA_ALLOWED_ORIGINS`: [контракт и квоты](AI_FEATURES.md#поиск-tavily).
+Новые проекты применяют все восемь SQL-файлов в порядке имён. В уже подготовленном проекте миграции повторно не выполняют: проверяйте историю. Поиск использует отдельную `web-search` функцию и ту же точную `DOMASHKA_ALLOWED_ORIGINS`. В исходнике 4.4 официальный keyless работает без ключа; серверный owner-only `TAVILY_API_KEY` и личный ключ только в памяти вкладки необязательны. Для уже существующего проекта нужна новая версия функции, **не повторение SQL**: [контракт и квоты](AI_FEATURES.md#поиск-tavily).
 
-Для первого Direct Upload можно собрать с `DOMASHKA_SITE_URL=auto` и `python3 scripts/prepare_cloud.py --zip Domashka_PRO_Cloudflare.zip`. Origin определяется из реального HTTPS-адреса, не из HTML-файла. Auth redirects/Origins/CAPTCHA это не настраивает: после deployment задайте точный адрес сервера по [CLOUD_LAUNCH.md](CLOUD_LAUNCH.md). Для постоянного автосборочного проекта Git-интеграцию Pages выбирайте при создании.
+Для первого Direct Upload можно собрать с `DOMASHKA_SITE_URL=auto` и `python3 scripts/prepare_cloud.py --zip Domashka_PRO_Cloudflare.zip`. Origin определяется из реального HTTPS-адреса, не из HTML-файла. Auth redirects/Origins/CAPTCHA это не настраивает: после deployment задайте точный адрес сервера по [CLOUD_LAUNCH.md](CLOUD_LAUNCH.md). Это описание для нового проекта. **Существующий Worker не пересоздавать.** Автообновление через Git Builds в этой поставке не настраивалось; оно требует отдельного решения владельца.

@@ -18,6 +18,7 @@ import { chatStore, subscribeHistory, getStudentStats } from '../api';
 
 export default function ChatSidebar({
   tutorOnly = false,
+  basic = false,
   variant = 'desktop', // 'desktop' | 'drawer'
   open = true,
   onClose,
@@ -343,7 +344,7 @@ export default function ChatSidebar({
 
       {/* Footer: Student Rank + Achievements + Auto-Save + Backup */}
       <div className="p-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-900 space-y-2 shrink-0">
-        <div className="p-2.5 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-800/60 space-y-1.5">
+        {!basic&&<div className="p-2.5 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-200/80 dark:border-amber-800/60 space-y-1.5">
           <div className="flex items-center justify-between text-[11px] font-extrabold text-amber-950 dark:text-amber-200">
             <span>{rankInfo.title}</span>
             <span className="inline-flex items-center gap-1">
@@ -374,7 +375,7 @@ export default function ChatSidebar({
               </div>
             ))}
           </div>
-        </div>
+        </div>}
 
         <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400 px-0.5">
           <span className="inline-flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-400">
@@ -390,7 +391,7 @@ export default function ChatSidebar({
           </div>
         )}
 
-        {!tutorOnly && <div className="grid grid-cols-2 gap-1.5">
+        {!tutorOnly && !basic && <div className="grid grid-cols-2 gap-1.5">
           <button
             type="button"
             onClick={handleExport}
@@ -432,7 +433,7 @@ export default function ChatSidebar({
   }
 
   return (
-    <aside className="no-print hidden lg:block w-72 min-w-[288px] max-w-[288px] shrink-0 sticky top-[57px] h-[calc(100vh-57px)]">
+    <aside className="no-print hidden lg:block w-72 min-w-[288px] max-w-[288px] shrink-0 sticky top-[64px] h-[calc(100dvh-64px)] study-history">
       {panel}
     </aside>
   );

@@ -52,7 +52,7 @@ describe('settings UI', () => {
     await setTutorModeEnabled(true, 'parent-password');
     render(<App />);
     expect(screen.getByText('Детский режим: только репетитор.')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Начать с подсказки' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Отправить сообщение' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Калькуляторы', exact: true })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Проверить', exact: true })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Скачать копию', exact: true })).toBeNull();

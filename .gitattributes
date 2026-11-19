@@ -1,2 +1,6 @@
 # Keep the downloadable build in Git, but collapse its generated diff on GitHub.
 Domashka_PRO.html text eol=lf linguist-generated=true
+
+# Ready distribution archives are generated binary deliverables.
+Domashka_PRO_Portable.zip binary linguist-generated=true
+Domashka_PRO_Cloudflare.zip binary linguist-generated=true

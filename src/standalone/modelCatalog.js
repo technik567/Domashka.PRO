@@ -1,3 +1,4 @@
+import { QWEN_DEMO_MODELS } from './qwenDemo';
 import { PUBLIC_DEMOS } from './publicModelCatalog';
 
 export const BUILTIN_MODELS = [
@@ -6,6 +7,7 @@ export const BUILTIN_MODELS = [
   { id: 'pollinations', name: 'Pollinations · облачный маршрутизатор', description: 'Модель выбирает сервис Pollinations. Доступность без ключа зависит от его правил и лимитов.' },
   { id: 'qwen-2.5-vl', name: 'Qwen 2.5 VL', description: 'Текст и одно изображение напрямую; подходит для несложных задач с фото.' },
   ...PUBLIC_DEMOS,
+  ...QWEN_DEMO_MODELS,
 ];
 
 export function getModelLabel(settings) {

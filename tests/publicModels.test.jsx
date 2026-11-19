@@ -13,8 +13,8 @@ describe('public models in the existing builtin-only picker', () => {
     render(<BuiltinModelPicker settings={loadAiSettings()} onChange={change} />);
     const picker = screen.getByLabelText('Нейросеть для ответа · без ключа');
     expect(picker.value).toBe(model.id);
-    expect(screen.getAllByRole('option')).toHaveLength(9);
-    expect(screen.getByText(/8 вариантов \+ авто/)).toBeTruthy();
+    expect(screen.getAllByRole('option')).toHaveLength(14);
+    expect(screen.getByText(/13 вариантов \+ авто/)).toBeTruthy();
     expect(screen.getByText(/смена модели её не обнуляет/)).toBeTruthy();
     expect(screen.getAllByText(`Площадка: ${model.space}`).length).toBeGreaterThan(0);
     expect(document.querySelector('.bg-violet-500')).toBeTruthy();

@@ -15,7 +15,7 @@ import zipfile
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
-PUBLIC_DOCS = ('USER_GUIDE.md','USER_GUIDE.txt','REFERENCE_COVERAGE.md','docs/CLOUD_SETUP.md','docs/CLOUD_LAUNCH.md','docs/PUBLIC_DEMOS.md','docs/QA_4.2.md','docs/QA_4.3.md','docs/AI_FEATURES.md','docs/AUTH_USERNAME.md')
+PUBLIC_DOCS = ('USER_GUIDE.md','USER_GUIDE.txt','REFERENCE_COVERAGE.md','docs/CLOUD_SETUP.md','docs/CLOUD_LAUNCH.md','docs/PUBLIC_DEMOS.md','docs/QA_4.2.md','docs/QA_4.3.md','docs/QA_4.4.md','docs/AI_FEATURES.md','docs/AUTH_USERNAME.md')
 
 
 def public_config(environ=None):
@@ -93,7 +93,11 @@ def main():
             for relative in ('index.html','_headers','Domashka_PRO.html',*PUBLIC_DOCS):
                 file = output / relative
                 if file.is_file():
-                    package.write(file, arcname=file.relative_to(output))
+                    entry = zipfile.ZipInfo(file.relative_to(output).as_posix(), date_time=(1980,1,1,0,0,0))
+                    entry.create_system = 3
+                    entry.external_attr = 0o644 << 16
+                    entry.compress_type = zipfile.ZIP_DEFLATED
+                    package.writestr(entry, file.read_bytes())
         print(f'Пакет Cloudflare static assets: {args.zip}')
     print(f'Облачная статическая сборка готова: {output}')
     print('Это НЕ deployment и НЕ проверка Supabase/Turnstile. Загрузите файлы в свой Cloudflare Workers/Pages-проект после серверной настройки.')

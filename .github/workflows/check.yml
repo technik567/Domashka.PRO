@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      public_smoke:
+        description: 'Explicit opt-in: short anonymous Qwen3/Tavily live requests (uses free quota, no keys)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,3 +45,24 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_*.py' -v
       - name: Ensure the downloadable HTML matches its sources
         run: git diff --exit-code -- Domashka_PRO.html USER_GUIDE.txt REFERENCE_COVERAGE.md
+
+  public-smoke:
+    if: github.event_name == 'workflow_dispatch' && inputs.public_smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Explicit anonymous synthetic probes, no retries or personal keys
+        run: |
+          npx esbuild scripts/probe_public_routes.mjs --bundle --platform=node --format=esm --outfile=.cache/probe-public-routes.mjs
+          node .cache/probe-public-routes.mjs --run-live
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-route-smoke
+          path: .cache/public-smoke.json

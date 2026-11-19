@@ -31,7 +31,7 @@ import {
   preparePhotoFile,
 } from '../api';
 import MarkdownMath from './MarkdownMath';
-import AiThinkingCard from './AiThinkingCard';
+import WorkflowPanel from './WorkflowPanel';
 import PhotoScannerBox, { stripSnippetFromField } from './PhotoScannerBox';
 import VoiceMicButton from './VoiceMicButton';
 import DrawingPadModal from './DrawingPadModal';
@@ -176,7 +176,7 @@ export default function DraftChecker({
       setResult({
         id: loadedItem.id,
         markdown: loadedItem.response_md,
-        providerUsed: loadedItem.provider_used || '',
+        providerUsed: loadedItem.provider_used || '', workflow: loadedItem.workflow,
         photoInputUsed: loadedItem.photo_input_used || 'none',
         messages: loadedItem.messages || [],
       });
@@ -252,7 +252,7 @@ export default function DraftChecker({
 
   const handleCheck = async (e) => {
     e?.preventDefault?.();
-    if (attachmentBusy || pasteBusy) return;
+    if (attachmentBusy || pasteBusy || abortRef.current) return;
     setError('');
 
     if (!draftText.trim() && !imageBase64 && imagesList.length === 0 && !ocrText.trim()) {
@@ -317,7 +317,7 @@ export default function DraftChecker({
     setResult({
       id: res.id,
       markdown: res.markdown,
-      providerUsed: res.providerUsed,
+      providerUsed: res.providerUsed, workflow:res.workflow,
       photoInputUsed: res.photoInputUsed,
       mistakesAdded: res.mistakesAdded || 0,
       messages: res.messages,
@@ -391,7 +391,7 @@ export default function DraftChecker({
         className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden"
       >
         <div className="p-4 sm:p-6 pb-0">
-          <BuiltinModelPicker settings={aiSettings} onChange={onChangeAiSettings} disabled={checking || chatLoading} onOpenSettings={onOpenAiSettings} tools={<AiRequestControls settings={aiSettings} value={requestModes} onChange={setRequestModes} disabled={checking || chatLoading} />} />
+          <BuiltinModelPicker pickerId="checker-builtin-model-picker" selectId="checker-builtin-model" settings={aiSettings} onChange={onChangeAiSettings} disabled={checking || chatLoading} onOpenSettings={onOpenAiSettings} tools={<AiRequestControls settings={aiSettings} value={requestModes} onChange={setRequestModes} disabled={checking || chatLoading} />} />
           {aiSettings.provider !== 'builtin' && <AiRequestControls settings={aiSettings} value={requestModes} onChange={setRequestModes} disabled={checking || chatLoading} />}
         </div>
         {/* Header & Mode Selector */}
@@ -676,18 +676,12 @@ export default function DraftChecker({
       {/* Rich Animated AI Thinking Card (Auto-scrolled into view!) */}
       {checking && (
         <div ref={thinkingRef} className="scroll-mt-20">
-          <AiThinkingCard
-            title="ИИ-учитель внимательно проверяет ваш черновик..."
-            status={aiStatus}
-            hasPhoto={Boolean(imageBase64) && !ocrText}
-            modeLabel="Проверка работы"
-            onOpenSettings={onOpenAiSettings}
-            onCancel={handleCancelRequest}
-          />
+          <WorkflowPanel busy advanced status={aiStatus} onCancel={handleCancelRequest}/>
         </div>
       )}
 
       {/* Full Teacher Review + Follow-up Chat */}
+      {result?.workflow && !checking && !chatLoading && <WorkflowPanel workflow={result.workflow} advanced/>}
       {result && !checking && (
         <div
           ref={resultRef}
@@ -814,11 +808,7 @@ export default function DraftChecker({
 
             {chatLoading && (
               <div ref={chatThinkingRef} className="mt-5 scroll-mt-20">
-                <AiThinkingCard
-                  title="Учитель отвечает на вопрос по вашей работе..."
-                  status={chatStatus}
-                  onOpenSettings={onOpenAiSettings}
-                />
+                <WorkflowPanel busy advanced status={chatStatus} onCancel={handleCancelRequest}/>
               </div>
             )}
           </div>

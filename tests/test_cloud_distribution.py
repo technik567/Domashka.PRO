@@ -2,8 +2,10 @@ import base64
 import json
 from pathlib import Path
 import tempfile
+import re
+import zipfile
 import unittest
-from scripts.prepare_cloud import prepare_cloud, public_config
+from scripts.prepare_cloud import prepare_cloud, public_config, PUBLIC_DOCS, HEADERS, ROOT
 
 ENV = {'DOMASHKA_SUPABASE_URL': 'https://exampleproject.supabase.co',
        'DOMASHKA_SUPABASE_PUBLISHABLE_KEY': 'sb_publishable_0123456789abcdef012345',
@@ -72,3 +74,26 @@ class CloudDistributionTests(unittest.TestCase):
             self.assertNotIn('never-export-this', html)
             self.assertNotIn('</script><img>', html)
             self.assertIn('\\u003c', html)
+
+    def test_committed_cloud_package_is_current_public_only_and_reproducible(self):
+        with zipfile.ZipFile(ROOT / 'Domashka_PRO_Cloudflare.zip') as archive:
+            self.assertEqual(set(archive.namelist()), {'index.html', '_headers', 'Domashka_PRO.html', *PUBLIC_DOCS})
+            self.assertEqual(archive.read('Domashka_PRO.html'), (ROOT / 'Domashka_PRO.html').read_bytes())
+            self.assertEqual(archive.read('_headers').decode('utf-8'), HEADERS)
+            for relative in PUBLIC_DOCS:
+                self.assertEqual(archive.read(relative), (ROOT / relative).read_bytes())
+            for entry in archive.infolist():
+                self.assertEqual(entry.date_time, (1980, 1, 1, 0, 0, 0))
+                self.assertEqual(entry.create_system, 3)
+                self.assertEqual(entry.external_attr >> 16, 0o644)
+            html = archive.read('index.html').decode('utf-8')
+            config = json.loads(re.search(r'window.__DOMASHKA_CLOUD__ = (.*?);</script>', html).group(1))
+            self.assertEqual(config, public_config({
+                'DOMASHKA_SUPABASE_URL': config['url'],
+                'DOMASHKA_SUPABASE_PUBLISHABLE_KEY': config['publishableKey'],
+                'DOMASHKA_SITE_URL': config['siteUrl'],
+                'DOMASHKA_TURNSTILE_SITE_KEY': config['captchaSiteKey'],
+            }))
+            self.assertEqual(config['siteUrl'], 'auto')
+            stripped = re.sub(r'\n  <script>window.__DOMASHKA_CLOUD__ = .*?;</script>', '', html, count=1)
+            self.assertEqual(stripped, (ROOT / 'Domashka_PRO.html').read_text(encoding='utf-8'))

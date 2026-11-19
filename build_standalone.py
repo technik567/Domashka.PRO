@@ -7,7 +7,7 @@ Builds a single-file client with embedded JavaScript, CSS and KaTeX fonts:
   - USER_GUIDE.txt (UTF-8 text copy of the full guide)
 Desktop: open the generated HTML without Python/Node/server.
 Mobile file viewers may block JavaScript/storage; prefer HTTPS, especially on iOS.
-The root HTML is tracked in Git; static/ and the portable ZIP remain generated artifacts.
+The root HTML is tracked in Git; static/ remains generated; the Portable ZIP is tracked for direct download.
 """
 import base64
 import glob
@@ -18,7 +18,16 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(ROOT, "static", "assets")
-DISTRIBUTION_DOCS = ('USER_GUIDE.md', 'REFERENCE_COVERAGE.md', 'docs/CLOUD_SETUP.md', 'docs/CLOUD_LAUNCH.md', 'docs/PUBLIC_DEMOS.md', 'docs/QA_4.2.md', 'docs/QA_4.3.md', 'docs/AI_FEATURES.md', 'docs/AUTH_USERNAME.md')
+DISTRIBUTION_DOCS = ('USER_GUIDE.md', 'REFERENCE_COVERAGE.md', 'docs/CLOUD_SETUP.md', 'docs/CLOUD_LAUNCH.md', 'docs/PUBLIC_DEMOS.md', 'docs/QA_4.2.md', 'docs/QA_4.3.md', 'docs/QA_4.4.md', 'docs/AI_FEATURES.md', 'docs/AUTH_USERNAME.md')
+
+
+def add_zip_entry(archive, name, data, mode=0o644):
+    """Stable bytes/permissions, independent of source mtime or builder OS."""
+    info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+    info.create_system = 3
+    info.external_attr = mode << 16
+    info.compress_type = zipfile.ZIP_DEFLATED
+    archive.writestr(info, data)
 
 
 def inline_katex_fonts(css_text: str) -> str:
@@ -117,11 +126,14 @@ iPhone/iPad: рекомендуется HTTPS-сайт в Safari. «Файлы»
 Это копия USER_GUIDE.md из исходников, включённая в комплект при сборке.
 
 ВЫБОР НЕЙРОСЕТИ
-Бесплатная модель выбирается прямо в чате, под настройкой формата ответа.
-Провайдеры с ключами и свой API — в шестерёнке ИИ в шапке.
+Бесплатная модель выбирается в чате: раскройте «Модель: …».
+Провайдеры с ключами/свой API: Настройки → Продвинутый → Настройки нейросети.
 Описание и цветные оценки — условные ориентиры, не бенчмарки.
 Без ключа: Qwen / Pollinations, публичные демо Google Gemma 3 12B, Gemma 3n E4B,
-Gemma 2 9B, Meta Llama 3.2 3B и Mistral 7B v0.3. Всего 8 вариантов плюс автовыбор.
+Gemma 2 9B, Meta Llama 3.2 3B и Mistral 7B v0.3 сохранены.
+Пять новых экспериментальных Qwen3: 8B, 14B, 30B-A3B, 32B, 235B-A22B.
+Всего 13 вариантов плюс автовыбор. Новые Qwen3 — текст/OCR, не Vision.
+Это разные модели одной площадки, а не пять независимых квот.
 Gemma — модели Google, но не Gemini API. У демо Hugging Face общая анонимная GPU-квота
 и очередь: больше моделей не добавляет бесплатного времени. Демо заранее резервируют
 60–120 секунд GPU, поэтому даже короткий запрос может не пройти по остатку квоты.
@@ -143,15 +155,29 @@ OCR передаёт текст, не рисунок. Демо ожидаютс�
 «Голосом» работает только при поддержке браузера/ОС; запасной вариант — микрофон
 экранной клавиатуры. Для мобильных функций предпочтительна Safari/Chrome HTTPS.
 
-НОВОЕ В 4.3
-Таблицы и графики в ответах ИИ; скачивание безопасного SVG. «Рассуждение»:
-три уровня, честная подпись API или инструкции. Полный поиск — в облачном
-кабинете, с серверным ключом владельца и ограниченной бесплатной квотой.
-В локальном HTML поиск недоступен. Отдельный помощник по сайту: локальная
-справка + публичное демо Qwen 235B/явный выбор Gemma. Нет гарантии доступности.
-Первый визит: короткое обучение, его можно пропустить/повторить из помощи.
-Отдельный Domashka_PRO_Cloudflare.zip предназначен для публикации владельцем,
-не для открытия в HTML Viewer. ZIP сам по себе не означает, что сайт запущен.
+НОВОЕ В 4.4
+По умолчанию — базовый чат. В Настройках переключается весь интерфейс:
+Базовый / Продвинутый, класс, тема и спокойный фотофон с выключателем.
+Семья и восстановление доступны всегда; режим не меняет права ребёнка.
+«Подумать»: адаптивно либо низкий/средний/высокий в продвинутом интерфейсе.
+Средний — отдельный проверочный запрос, высокий — два и вычислитель для
+подходящих числовых равенств. Это медленнее, расходует квоту и может ошибаться.
+Ход работы показывает события и время, не скрытые мысли и не проценты.
+«Интернет: авто»: модель сама решает, нужен ли поиск, и составляет фразу.
+Отдельного поля поиска нет. Tavily keyless ограничен квотой; в локальном HTML
+доступ зависит от браузера/CORS. В облаке требуется обновление web-search 4.4.
+Необязательный ключ поиска: Настройки → Продвинутый; только в памяти вкладки,
+не в учебном экспорте/сообщениях ИИ. Общий ключ владельца остаётся на сервере.
+Максимум 4 прохода модели с планированием, 2 поиска, 8 минут ожидания.
+Нет источников/неверный план — ошибка, а не выдуманный поиск. В репетиторе
+поиск запрещён. Проверка ответа может завершиться частично с предупреждением.
+«Остановить» отменяет ожидание, но не обещает возврат квоты чужого сервера.
+Публичные Qwen3 имеют проверенный GET-контракт, но живой POST не прошёл
+сетевое соединение из среды разработки. Анонимная работа не гарантируется.
+Таблицы, графики/SVG, отдельный помощник и интерактивное обучение сохранены.
+Отдельный Domashka_PRO_Cloudflare.zip — для существующего Workers-сайта,
+не для HTML Viewer. ZIP не является deployment и не обновляет Edge-функции.
+SQL, аккаунты, пароли, десять кодов и Turnstile в этом обновлении не менялись.
 
 СОХРАНЕНО ИЗ 4.2
 Ожидание ИИ/OCR показывает этапы, без недостоверных процентов.
@@ -192,10 +218,10 @@ OPENROUTER И ПРОГРЕСС
 Ожидание сложного ответа — до 5 минут, доступна отмена. Автоматического повторного
 платного запроса после серверного сбоя нет. Проценты готовности ИИ/OCR убраны.
 Показаны этапы и прошедшее время; галочки появляются по факту, не по таймеру.
-Новых непроверенных бесплатных шлюзов в список не добавляли.
+Новые демо отдельно обозначены как экспериментальные; рабочий ответ не обещается.
 
 СТАРЫЙ ОДНО-ПРОФИЛЬНЫЙ ДЕТСКИЙ РЕЖИМ
-Настройте класс и нейросеть, нажмите щит/замок, задайте и подтвердите пароль (от 8 символов).
+Настройки → Детский режим с паролем: задайте и подтвердите пароль (от 8 символов).
 Останутся репетитор, семья, дневник и справочник. Для выхода или смены пароля нужен текущий пароль.
 Обычные чаты скрываются, но не удаляются. Пароль не отправляется в сеть; хранится его хеш.
 Старый одно-профильный режим относится к этому браузеру/файлу. Ограничения семейного
@@ -212,7 +238,7 @@ OPENROUTER И ПРОГРЕСС
 в «Семье» также сохраняет дневник/расписание, но не ключи, сеансы или пароли.
 У этого локального HTML нет автосинхронизации; общий прогресс — на настроенном
 облачном сайте. Не очищайте данные до экспорта. Перед обновлением проверьте копию.
-Настройка облака и ограничения: docs/CLOUD_SETUP.md; отчёт проверок: docs/QA_4.3.md.
+Настройка облака и ограничения: docs/CLOUD_SETUP.md; отчёт проверок: docs/QA_4.4.md.
 """
 
     win_bat = '@echo off\r\nchcp 65001 >nul\r\nstart "" "%~dp0Domashka_PRO.html"\r\n'
@@ -220,17 +246,18 @@ OPENROUTER И ПРОГРЕСС
 
     zip_path = os.path.join(ROOT, "Domashka_PRO_Portable.zip")
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.write(out_main, arcname="Domashka_PRO/Domashka_PRO.html")
-        zf.writestr("Domashka_PRO/КАК_ЗАПУСТИТЬ.txt", readme_txt)
-        zf.write(guide_path, arcname="Domashka_PRO/ПОЛНАЯ_ИНСТРУКЦИЯ.txt")
+        with open(out_main, "rb") as file:
+            add_zip_entry(zf, "Domashka_PRO/Domashka_PRO.html", file.read())
+        add_zip_entry(zf, "Domashka_PRO/КАК_ЗАПУСТИТЬ.txt", readme_txt)
+        with open(guide_path, "rb") as file:
+            add_zip_entry(zf, "Domashka_PRO/ПОЛНАЯ_ИНСТРУКЦИЯ.txt", file.read())
         for relative in DISTRIBUTION_DOCS:
             source = os.path.join(ROOT, relative)
             if os.path.isfile(source):
-                zf.write(source, arcname=f"Domashka_PRO/{relative}")
-        zf.writestr("Domashka_PRO/Запустить_Windows.bat", win_bat)
-        info = zipfile.ZipInfo("Domashka_PRO/Запустить_Mac_Linux.command")
-        info.external_attr = 0o755 << 16
-        zf.writestr(info, mac_cmd)
+                with open(source, "rb") as file:
+                    add_zip_entry(zf, f"Domashka_PRO/{relative}", file.read())
+        add_zip_entry(zf, "Domashka_PRO/Запустить_Windows.bat", win_bat)
+        add_zip_entry(zf, "Domashka_PRO/Запустить_Mac_Linux.command", mac_cmd, 0o755)
 
     size_kb = os.path.getsize(out_main) / 1024
     zip_kb = os.path.getsize(zip_path) / 1024

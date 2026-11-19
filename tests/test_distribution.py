@@ -46,6 +46,7 @@ class DistributionTests(unittest.TestCase):
         self.assertEqual(package['version'], f'{version}.0')
         self.assertIn(f'<title>Домашка.ПРО v{version}', html)
         self.assertIn('window.__STANDALONE_BUILD__ = true;', html)
+        self.assertIn('data:image/webp;base64,', html)
         self.assertNotIn('/Domashka_PRO.html', (ROOT / '.gitignore').read_text().splitlines())
         shell = ShellParser()
         shell.feed(html)
@@ -100,6 +101,9 @@ class DistributionTests(unittest.TestCase):
                 guide = '# Инструкция\nПК, Android и iPhone.\n'
                 (root / 'USER_GUIDE.md').write_text(guide, encoding='utf-8')
                 build_standalone.build()
+                first_archive = (root / 'Domashka_PRO_Portable.zip').read_bytes()
+                build_standalone.build()
+                self.assertEqual((root / 'Domashka_PRO_Portable.zip').read_bytes(), first_archive)
             self.assertEqual((root / 'USER_GUIDE.txt').read_text(encoding='utf-8'), guide)
             html = (root / 'Domashka_PRO.html').read_bytes()
             self.assertEqual((root / 'static/Domashka_PRO.html').read_bytes(), html)
@@ -117,6 +121,10 @@ class DistributionTests(unittest.TestCase):
             self.assertEqual(archive.read('Domashka_PRO/Domashka_PRO.html'), (ROOT / 'Domashka_PRO.html').read_bytes())
             self.assertEqual(archive.read('Domashka_PRO/ПОЛНАЯ_ИНСТРУКЦИЯ.txt'), (ROOT / 'USER_GUIDE.md').read_bytes())
             self.assertEqual(len(archive.namelist()), 5 + len(build_standalone.DISTRIBUTION_DOCS))
+            for entry in archive.infolist():
+                self.assertEqual(entry.date_time, (1980, 1, 1, 0, 0, 0))
+                self.assertEqual(entry.create_system, 3)
+                self.assertEqual(entry.external_attr >> 16, 0o755 if entry.filename.endswith('.command') else 0o644)
             for relative in build_standalone.DISTRIBUTION_DOCS:
                 self.assertEqual(archive.read(f'Domashka_PRO/{relative}'), (ROOT / relative).read_bytes())
             quick = archive.read('Domashka_PRO/КАК_ЗАПУСТИТЬ.txt').decode('utf-8')

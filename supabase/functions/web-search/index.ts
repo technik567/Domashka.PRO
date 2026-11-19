@@ -36,7 +36,7 @@ Deno.serve(async (request: Request) => {
   if (origin && origins.includes(origin)) headers['Access-Control-Allow-Origin'] = origin;
   const reply = (status: number, body: object) => new Response(JSON.stringify(body), { status, headers });
   if (!origins.length || !endpoint || !publicKey || !serviceKey) return reply(503, { ok: false, error: 'Владелец ещё не настроил поисковую функцию и разрешённый адрес сайта.' });
-  if (origin && !origins.includes(origin)) return reply(403, { ok: false, error: 'Адрес сайта не разрешён.' });
+  if (!origin || !origins.includes(origin)) return reply(403, { ok: false, error: 'Адрес сайта не разрешён.' });
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: { ...headers,
     'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info' } });
   if (request.method !== 'POST') return reply(405, { ok: false, error: 'Нужен POST.' });
@@ -45,25 +45,29 @@ Deno.serve(async (request: Request) => {
   try {
     if (Number(request.headers.get('Content-Length')) > 4096) return reply(413, { ok: false, error: 'Поисковая фраза слишком длинная.' });
     const body = JSON.parse(await boundedText(request.body, 4096, AbortSignal.timeout(8000)));
-    if (!body || typeof body !== 'object' || Object.keys(body).some((k) => !['query','requestId'].includes(k)) || !uuid(body.requestId)
-      || typeof body.query !== 'string' || body.query.trim().length < 3 || body.query.length > 300)
+    if (!body || typeof body !== 'object' || Object.keys(body).some((k) => !['query','requestId','searchKey'].includes(k)) || !uuid(body.requestId)
+      || typeof body.query !== 'string' || body.query.trim().length < 3 || body.query.length > 300 || /[\u0000-\u001f\u007f]/.test(body.query)
+      || body.searchKey !== undefined && (typeof body.searchKey !== 'string' || !/^tvly-[A-Za-z0-9_-]{10,240}$/.test(body.searchKey)))
       return reply(400, { ok: false, error: 'Нужны поисковая фраза 3–300 символов и идентификатор запроса.' });
     const query = body.query.trim();
-    if (/(?:sb_secret_|sb_publishable_|tvly-|sk-[a-z0-9]{12}|eyJ[a-z0-9_-]{20})/i.test(query))
+    if (/(?:sb_secret_|sb_publishable_|tvly-|sk-[a-z0-9]{12}|eyJ[a-z0-9_-]{20}|[a-f0-9]{8}(?:[- ]?[a-f0-9]{8}){3}|[\w.+-]+@[\w.-]+\.[a-z]{2,}|(?:пароль|password|секрет|secret)\s*[:=]|(?:\+?\d[ ()-]*){10,})/i.test(query))
       return reply(400, { ok: false, error: 'Поисковая фраза похожа на секретный ключ. Уберите ключи, пароли и личные данные.' });
     const user = createClient(endpoint, publicKey, { ...options, global: { headers: { Authorization: authorization } } });
     const { data, error } = await user.auth.getUser(authorization.slice(7));
     if (error || !data.user) return reply(401, { ok: false, error: 'Сеанс истёк. Войдите заново.' });
     const claims = JSON.parse(atob(authorization.slice(7).split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
     if (claims.sub !== data.user.id || !uuid(claims.session_id)) return reply(401, { ok: false, error: 'Некорректный сеанс.' });
-    if (!searchKey) return reply(503, { ok: false, error: 'Полный поиск ещё не включён: владелец должен добавить TAVILY_API_KEY в секреты сервера. Пользовательский ключ ИИ не нужен.' });
+    // No owner credential is required for documented Tavily keyless access.
+    // Personal keys are request-scoped, never saved/logged/returned. Server
+    // reservation below remains mandatory in every mode (including keyless).
+    const effectiveKey = body.searchKey || searchKey;
     const admin = createClient(endpoint, serviceKey, options);
     const reserved = await admin.rpc('domashka_reserve_search', { actor_id: data.user.id, actor_session: claims.session_id, request_id: body.requestId });
     if (reserved.error || reserved.data !== true) return reply(reserved.error?.code === '42501' ? 403 : 429, { ok: false,
       error: reserved.error?.code === '42501' ? 'Поиск запрещён для этого сеанса или родительским режимом.' : 'Поиск не разрешён: исчерпана квота, запрос уже принят или владелец ещё не установил миграцию поиска. Повтор автоматически не выполняется.' });
     const signal = AbortSignal.timeout(18000);
     const response = await fetch('https://api.tavily.com/search', { method: 'POST', signal, redirect: 'error',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${searchKey}` },
+      headers: { 'Content-Type': 'application/json', ...(effectiveKey ? { Authorization: `Bearer ${effectiveKey}` } : { 'X-Tavily-Access-Mode': 'keyless' }) },
       body: JSON.stringify({ query, search_depth: 'basic', max_results: 5, topic: 'general', auto_parameters: false,
         include_answer: false, include_raw_content: false, include_images: false, safe_search: true }) });
     if (!response.ok) { await response.body?.cancel(); return reply(response.status === 429 || response.status >= 432 && response.status <= 434 ? 429 : 502,

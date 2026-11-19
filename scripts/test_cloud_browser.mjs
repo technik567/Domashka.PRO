@@ -111,6 +111,11 @@ async function context(options = {}) {
   ctx.on('page',(page) => { page.on('pageerror',(error) => pageErrors.push(error.message)); page.on('dialog',(dialog) => dialog.accept()); page.setDefaultTimeout(12000); });
   return state;
 }
+async function advanced(page) {
+  await page.getByRole('button',{name:'Настройки',exact:true}).click();
+  await page.getByRole('radio',{name:/Продвинутый/}).check();
+  await page.getByRole('button',{name:'Готово',exact:true}).click();
+}
 async function login(state, base, name) {
   const page = await state.ctx.newPage(); await page.goto(base);
   await page.getByRole('button',{name:'Позже',exact:true}).click();
@@ -118,8 +123,8 @@ async function login(state, base, name) {
   await page.getByLabel('Логин родителя или полный логин ребёнка').fill(name);
   await page.getByLabel('Пароль',{exact:true}).fill(password);
   await page.getByRole('form',{name:'Облачный вход'}).getByRole('button',{name:'Войти',exact:true}).click();
-  await page.getByRole('button',{name:'Дневник',exact:true}).waitFor();
-  await page.getByRole('button',{name:'Позже',exact:true}).click(); return page;
+  await page.locator('.simple-greeting').waitFor();
+  await page.getByRole('button',{name:'Позже',exact:true}).click(); await advanced(page); return page;
 }
 const status = (page) => page.getByRole('complementary',{name:'Синхронизация аккаунта'});
 async function sync(page) { await status(page).getByRole('button',{name:'Синхронизировать',exact:true}).click(); }
@@ -207,6 +212,7 @@ try {
   ok((await serial(()=>one('select xp from public.domashka_stats where user_id=$1',[child.id]))).xp===4,'reopened deck cannot farm the same card');
   await b.getByRole('button',{name:'Закрыть карточки',exact:true}).click();
   const parentCtx=await context({viewport:{width:1280,height:950}}); const p=await login(parentCtx,base,parent.email);
+  await p.getByRole('button',{name:'Семья',exact:true}).first().click();
   await p.getByLabel('Название задания').fill('QA семейная работа'); await p.getByLabel('Условие и что нужно прислать').fill('Напиши короткий ответ и приложи тестовое фото.');
   await p.getByRole('button',{name:'Назначить домашку',exact:true}).click(); await p.getByText('QA семейная работа',{exact:true}).waitFor();
   await b.getByRole('button',{name:'Семья',exact:true}).first().click(); await sync(b); await b.getByLabel('Мой ответ',{exact:true}).fill('Короткий черновик ученика');
@@ -242,9 +248,10 @@ try {
   await fileState.ctx.addInitScript(()=>{Object.defineProperty(crypto,'randomUUID',{value:undefined,configurable:true});});
   const filePage=await fileState.ctx.newPage(); await filePage.goto(pathToFileURL(path.join(root,'Domashka_PRO.html')).href);
   await filePage.getByRole('button',{name:'Позже',exact:true}).click();
+  await advanced(filePage);
   await filePage.locator('#chat-builtin-model').waitFor();
   const options=await filePage.locator('#chat-builtin-model option').allTextContents();
-  ok(options.length===9 && options.some(t=>t.includes('Gemma')) && options.some(t=>t.includes('Meta')) && options.some(t=>t.includes('Mistral')),'file HTML preserves eight free models plus auto without external requests');
+  ok(options.length===14 && options.some(t=>t.includes('Gemma')) && options.some(t=>t.includes('Meta')) && options.some(t=>t.includes('Mistral')),'file HTML preserves thirteen model routes plus auto without external requests');
   await filePage.getByRole('button',{name:'Шпаргалки',exact:true}).click();
   await filePage.getByRole('button',{name:'Учить по карточкам (5 мин)',exact:true}).click();
   await filePage.getByRole('button',{name:'Знаю — проверить',exact:true}).click();
