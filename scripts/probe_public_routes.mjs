@@ -31,4 +31,5 @@ try {
   }
 }catch(error){report.search={status:'not-verified',errorCode:error.name};}
 fs.mkdirSync('.cache',{recursive:true});fs.writeFileSync('.cache/public-smoke.json',JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));
+if(process.env.GITHUB_ACTIONS)console.log('::notice title=Public route smoke report::'+JSON.stringify(report).replace(/%/g,'%25').replace(/\r/g,'%0D').replace(/\n/g,'%0A'));
 if(report.models.some(model=>model.status!=='reply-verified') || report.search.status!=='results-verified')process.exitCode=1;
