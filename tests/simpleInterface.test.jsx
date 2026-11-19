@@ -65,6 +65,12 @@ describe('4.4 global simple interface',()=>{
     saveInterfacePreferences({mode:'advanced'});render(<App/>);fireEvent.click(screen.getByRole('button',{name:'Проверить',exact:true}));
     const picker=screen.getByRole('combobox',{name:'Нейросеть для ответа · без ключа'});expect(picker.id).toBe('checker-builtin-model');expect(document.querySelectorAll('#chat-builtin-model')).toHaveLength(1);
   });
+  it('basic mode hides an open advanced checker and restores its unsent work on return',()=>{
+    saveInterfacePreferences({mode:'advanced'});render(<App/>);fireEvent.click(screen.getByRole('button',{name:'Проверить',exact:true}));
+    const draft=screen.getByPlaceholderText(/Вставьте сюда своё сочинение/);fireEvent.change(draft,{target:{value:'Мой незаконченный разбор'}});
+    openSettings();setMode('basic');closeSettings();expect(screen.getByRole('heading',{name:'С чем помочь по учёбе?'})).toBeTruthy();expect(draft.closest('[hidden]')).toBeTruthy();
+    openSettings();setMode('advanced');closeSettings();expect(screen.getByPlaceholderText(/Вставьте сюда своё сочинение/)).toBe(draft);expect(draft.value).toBe('Мой незаконченный разбор');
+  });
   it('restores persisted basic/advanced preference and handles corrupted storage safely',()=>{saveInterfacePreferences({mode:'advanced',background:false});expect(loadInterfacePreferences()).toEqual({mode:'advanced',background:false});render(<App/>);expect(document.querySelector('.study-app').dataset.interface).toBe('advanced');});
 });
 describe('visible workflow receipts',()=>{

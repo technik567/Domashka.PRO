@@ -55,7 +55,10 @@ try {
   await page.locator('.simple-composer input[type=file]').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aG9sAAAAASUVORK5CYII=','base64')});
   await page.getByRole('img',{name:'Прикреплённое задание 1'}).waitFor();
   await mode('advanced');await page.locator('#chat-builtin-model').selectOption('pollinations');await page.getByRole('combobox',{name:'Глубина рассуждения'}).selectOption('medium');
-  await mode('basic');
+  await page.getByRole('button',{name:'Проверить',exact:true}).click();await page.getByPlaceholder(/Вставьте сюда своё сочинение/).fill('Незаконченный черновик проверки');
+  await mode('basic');await page.getByRole('heading',{name:'С чем помочь по учёбе?'}).waitFor();await mode('advanced');
+  ok(await page.getByPlaceholder(/Вставьте сюда своё сочинение/).inputValue()==='Незаконченный черновик проверки','basic mode hides advanced workspaces without unmounting or losing their forms');
+  await page.getByRole('navigation',{name:'Разделы приложения'}).getByRole('button',{name:'Чат',exact:true}).click();await mode('basic');
   ok(await page.getByRole('textbox',{name:'Твоё сообщение'}).inputValue()==='Черновик с фото, не отправлен' && await page.getByRole('img',{name:'Прикреплённое задание 1'}).isVisible(),'interface switches retain unsubmitted text and processed photo without a network call');
   await page.getByRole('button',{name:'Удалить фото 1'}).click();await submit('Проверь 2+2.');
   await page.getByText('Исправленный ответ.',{exact:false}).waitFor();

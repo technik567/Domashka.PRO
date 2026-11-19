@@ -84,6 +84,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('solver');
   const [interfacePrefs,setInterfacePrefs]=useState(loadInterfacePreferences);
   const basic=interfacePrefs.mode==='basic';
+  // Keep an advanced workspace mounted while basic mode shows the main chat.
+  // Returning to advanced restores its draft/photos/forms, not a fresh mount.
+  const displayedTab=basic&&activeTab!=='family'?'solver':activeTab;
   const [interfaceOpen,setInterfaceOpen]=useState(false);
   const updateInterface=next=>{setInterfacePrefs(saveInterfacePreferences(next));};
   const managedChild = getManagedChild();
@@ -121,7 +124,11 @@ export default function App() {
     window.speechSynthesis?.cancel();
   }, [tutorOnly]);
 
-  const navigateHelp = (section) => { setSidebarMobileOpen(false); setActiveTab(tutorOnly && !['family','diary','cheats','solver'].includes(section) ? 'solver' : section); };
+  const navigateHelp = (section) => {
+    const allowed=tutorOnly&&!['family','diary','cheats','solver'].includes(section)?'solver':section;
+    if(basic&&!['family','solver'].includes(allowed))updateInterface({...interfacePrefs,mode:'advanced'});
+    setSidebarMobileOpen(false);setActiveTab(allowed);
+  };
 
   function openAiSettings() {
     if (managedChild) { setActiveTab('family'); return; }
@@ -171,6 +178,7 @@ export default function App() {
     setActiveChatId(item.id);
     setLoadedItem({ ...item });
     if (item.item_type === 'check') {
+      if(basic)updateInterface({...interfacePrefs,mode:'advanced'});
       setActiveTab('checker');
     } else {
       setActiveTab('solver');
@@ -180,7 +188,7 @@ export default function App() {
   function handleStartNewChat() {
     setActiveChatId(null);
     setResetSignal((n) => n + 1);
-    if (activeTab !== 'solver' && activeTab !== 'checker') {
+    if (basic || activeTab !== 'solver' && activeTab !== 'checker') {
       setActiveTab('solver');
     }
   }
@@ -199,7 +207,7 @@ export default function App() {
     setActiveTab('arena');
   }
 
-  const isSolverActive = activeTab === 'solver';
+  const isSolverActive = displayedTab === 'solver';
 
   return <div className="study-app" data-interface={interfacePrefs.mode} data-photo-background={interfacePrefs.background?'on':'off'} style={{'--study-photo':`url("${backgroundUrl}")`}}>
     {isSandboxedViewer&&<div className="study-viewer-notice">Скачайте Domashka_PRO.html и откройте в браузере. Просмотр файла здесь не предоставляет облачный кабинет.</div>}
@@ -228,7 +236,7 @@ export default function App() {
         <div className={isSolverActive?'study-chat-width':'study-tools-width'}>
             <div key={`workspace-${tutorOnly}`}>
               {activeTab === 'family' && <FamilyAccounts />}
-              <div hidden={activeTab !== 'solver'}>
+              <div hidden={!isSolverActive}>
                 <HomeworkSolver
                   tutorOnly={tutorOnly}
                   interfaceMode={interfacePrefs.mode}
@@ -246,6 +254,7 @@ export default function App() {
                 />
               </div>
 
+              <div hidden={basic}>
               {!tutorOnly && activeTab === 'checker' && (
                 <DraftChecker
                   profile={profile}
@@ -292,12 +301,13 @@ export default function App() {
                   onSolveSample={handleSendToSolver}
                 />
               )}
+              </div>
             </div>
         </div>
       </main>
     </div>
     <footer className="study-footer no-print">ИИ может ошибаться. Проверяйте важное. <span>{cloudConfigured()?'Облачный кабинет':'Локальное хранение на этом устройстве'}</span>{!tutorOnly&&isHttpServer&&<a href="./Domashka_PRO.html" download="Domashka_PRO.html" aria-label="Скачать автономный HTML">Автономная версия</a>}</footer>
-    <SiteAssistant page={activeTab} onNavigate={navigateHelp} onReplayTour={()=>setTourReplay(n=>n+1)}/>
+    <SiteAssistant page={displayedTab} onNavigate={navigateHelp} onReplayTour={()=>setTourReplay(n=>n+1)}/>
     <GuidedTour inlineWelcome role={getCurrentAccount()?.role||'guest'} cloudMode={cloudConfigured()} tutorOnly={tutorOnly} interfaceMode={interfacePrefs.mode} allowAi={managedChild?.policy.allowAi!==false} replay={tourReplay} onNavigate={navigateHelp}/>
     <ParentModeModal isOpen={parentOpen} onClose={()=>setParentOpen(false)} status={parentStatus}/>
     <InterfaceSettings open={interfaceOpen} onClose={()=>setInterfaceOpen(false)} preferences={interfacePrefs} onPreferences={updateInterface} theme={theme} onTheme={setTheme} profile={profile} onGrade={updateGrade} onGoal={updateGoal} goals={EXAM_GOALS} managed={Boolean(managedChild)} tutorOnly={tutorOnly} onAi={openAiSettings} onParent={!cloudConfigured()&&!managedChild?()=>setParentOpen(true):undefined} onFamily={()=>setActiveTab('family')}/>
