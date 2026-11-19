@@ -6,7 +6,6 @@ __pycache__/
 .env.*
 !.env.example
 /static/
-/Domashka_PRO_Portable.zip
 /data/
 /uploads/
 /coverage/
@@ -14,4 +13,4 @@ __pycache__/
 /playwright-report/
 /.cache/
 
-# Domashka_PRO_Cloudflare.zip is tracked for the requested direct GitHub download.
+# Both Domashka_PRO_Cloudflare.zip and Domashka_PRO_Portable.zip are tracked for the requested direct GitHub download.

@@ -4,17 +4,29 @@ import { getPublicDemo } from '../standalone/publicModelCatalog';
 import { isTutorModeEnabled } from '../standalone/parentalControl';
 import ModelInfoCard from './ModelInfoCard';
 
-export default function BuiltinModelPicker({ settings, onChange, disabled = false, tutorOnly = false, onOpenSettings, tools }) {
+export default function BuiltinModelPicker({ settings, onChange, disabled = false, tutorOnly = false, onOpenSettings, tools, compact = false, pickerId = 'builtin-model-picker', selectId = 'chat-builtin-model' }) {
   if (settings?.provider !== 'builtin') return null;
   const selected = settings.builtinModel || 'auto';
   const publicDemo = getPublicDemo(selected);
   const readOnly = disabled || tutorOnly || !onChange;
-  return <section data-tour="model-picker" id="builtin-model-picker" aria-label="Бесплатная нейросеть для ответа" className="rounded-2xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/60 dark:bg-indigo-950/30 p-3 space-y-2.5 scroll-mt-20">
+  if (compact) return <div className="compact-model-controls">
+    {tools}
+    <details data-tour="model-picker" id={pickerId} className="compact-model-picker"><summary>Модель: {selected==='auto'?'Авто':BUILTIN_MODELS.find(m=>m.id===selected)?.name || selected}</summary>
+      <div className="compact-model-popover"><label htmlFor={selectId} className="block text-xs font-semibold mb-2">Нейросеть для ответа · без ключа</label>
+        <select id={selectId} value={selected} disabled={readOnly} className="study-select w-full" onChange={e=>{if(!readOnly&&!isTutorModeEnabled())onChange?.({...settings,builtinModel:e.target.value});}}>
+          <optgroup label="Основные подключения">{BUILTIN_MODELS.filter(m=>!m.experimental).map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</optgroup>
+          <optgroup label="Новые · экспериментальные демо">{BUILTIN_MODELS.filter(m=>m.experimental).map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</optgroup>
+        </select><ModelInfoCard provider="builtin" model={selected}/>
+        <p className="study-muted">Публичные демо имеют лимиты. Доступность не гарантирована, автоматического обхода квот нет. {readOnly?'Модель меняет родитель.':''}</p>
+      </div>
+    </details>
+  </div>;
+  return <section data-tour="model-picker" id={pickerId} aria-label="Бесплатная нейросеть для ответа" className="study-model-panel space-y-2.5 scroll-mt-20">
     <div className="flex flex-wrap justify-between items-center gap-2">
-      <label htmlFor="chat-builtin-model" className="text-xs sm:text-sm font-extrabold text-indigo-900 dark:text-indigo-200">Нейросеть для ответа · без ключа</label>
+      <label htmlFor={selectId} className="text-xs sm:text-sm font-extrabold text-indigo-900 dark:text-indigo-200">Нейросеть для ответа · без ключа</label>
       <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-300">{BUILTIN_MODELS.length - 1} вариантов + авто · есть лимиты</span>
     </div>
-    <select id="chat-builtin-model" disabled={readOnly} value={selected} onChange={(event) => {
+    <select id={selectId} disabled={readOnly} value={selected} onChange={(event) => {
       if (!readOnly && !isTutorModeEnabled()) onChange?.({ ...settings, builtinModel: event.target.value });
     }} className="w-full min-w-0 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-900 p-2.5 text-xs sm:text-sm text-slate-900 dark:text-white disabled:opacity-60">
       {BUILTIN_MODELS.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}

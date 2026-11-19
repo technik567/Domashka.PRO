@@ -1,3 +1,4 @@
+import { cleanWorkflow } from './workflowSummary';
 // Unified Persistent Storage Engine (IndexedDB for large chat histories + photos, localStorage for fast prefs & drafts, memory fallback)
 import { APP_VERSION } from '../version';
 import { workspaceKey, workspaceDbName, ensureWorkspaceActive, persistLocal } from './accounts';
@@ -223,6 +224,7 @@ export const chatStore = {
     precheck_md = '',
     sympy_badge = '',
     provider_used = '',
+    workflow,
     messages = [],
   }) {
     ensureWorkspaceActive();
@@ -258,6 +260,7 @@ export const chatStore = {
       precheck_md,
       sympy_badge,
       provider_used,
+      workflow: cleanWorkflow(workflow),
       favorite: 0,
       messages,
     };
@@ -289,6 +292,7 @@ export const chatStore = {
     const updated = {
       ...existing,
       ...patch,
+      workflow: cleanWorkflow(patch.workflow || existing.workflow),
       updated_at: Math.floor(Date.now() / 1000),
     };
     if (cloud()) return cloud().putChat(updated);
@@ -382,6 +386,7 @@ export const chatStore = {
       if (item && (typeof item.id === 'string' || (typeof item.id === 'number' && Number.isFinite(item.id))) &&
           typeof item.response_md === 'string' && item.response_md && !seen.has(item.id)) {
         item.tutor_only = false;
+        delete item.workflow; // imported receipts are not proof that this app ran a check
         item.photo_mode = ['auto', 'vision', 'ocr'].includes(item.photo_mode) ? item.photo_mode : 'auto';
         item.photo_input_used = ['vision', 'ocr', 'none'].includes(item.photo_input_used) ? item.photo_input_used : 'none';
         for (const field of ['title', 'task_text', 'subject', 'mode']) item[field] = String(item[field] || '');

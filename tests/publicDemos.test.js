@@ -23,7 +23,7 @@ describe('explicit anonymous demo routes', () => {
     expect(new Set(PUBLIC_DEMOS.map((m) => m.host)).size).toBe(5);
     expect(new Set(PUBLIC_DEMOS.map((m) => m.modelId)).size).toBe(5);
     expect(PUBLIC_DEMOS.filter((m) => m.modelId.startsWith('google/'))).toHaveLength(3);
-    expect(BUILTIN_MODELS).toHaveLength(9);
+    expect(BUILTIN_MODELS).toHaveLength(14);
     for (const model of PUBLIC_DEMOS) {
       expect(model.host).toMatch(/^https:\/\/[a-z0-9-]+\.hf\.space$/);
       expect(getPhotoCapability({ provider: 'builtin', model: model.id }).maxImages).toBe(model.maxImages);

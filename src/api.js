@@ -1,3 +1,4 @@
+import { cleanWorkflow } from './standalone/workflowSummary';
 import { ensureWorkspaceActive, getManagedChild, getInheritedAiSettings } from './standalone/accounts';
 import { isTutorModeEnabled } from './standalone/parentalControl';
 import { tutorFollowupQuestion } from './standalone/tutorPolicy';
@@ -207,7 +208,7 @@ export const api = {
     model,
     customBaseUrl, customTransport, customVision,
     onStatus,
-    reasoning = 'off', webSearch = false, searchQuery = '',
+    reasoning = 'off', webSearch = false,
     signal,
   }) {
     const locked = isTutorModeEnabled();
@@ -233,13 +234,13 @@ export const api = {
       const {
         text: ansMd,
         used: providerUsed,
-        extractedPhotoText, photoInputUsed = 'none',
+        extractedPhotoText, photoInputUsed = 'none', workflow,
       } = await generateAiBrowser({
         provider,
         apiKey,
         model,
         customBaseUrl, customTransport, customVision,
-        systemPrompt: sysPrompt, graphics: true, reasoning, webSearch, searchQuery,
+        systemPrompt: sysPrompt, graphics: true, reasoning, webSearch,
         messages: [{ role: 'user', content: userPrompt }],
         imageB64: allImgs[0] || null,
         images: allImgs,
@@ -264,7 +265,7 @@ export const api = {
         { role: 'assistant', content: ansMd },
       ];
 
-      onStatus?.({ stage: 'saving', message: 'Ответ получен. Сохраняем в вашу тетрадь…' });
+      onStatus?.({ stage: 'saving', message: 'Ответ получен. Сохраняем в вашу тетрадь…', trail:workflow?.trail, elapsedMs:workflow?.elapsedMs });
       const saved = await chatStore.saveNew({
         item_type: 'solve',
         tutor_only: locked,
@@ -281,6 +282,7 @@ export const api = {
         response_md: ansMd,
         sympy_badge: recheckedSympy,
         provider_used: providerUsed,
+        workflow: cleanWorkflow(workflow),
         messages: convMessages,
       });
 
@@ -290,7 +292,7 @@ export const api = {
         chatRecord: saved,
         markdown: ansMd,
         extractedPhotoText: finalOcr,
-        photoInputUsed,
+        photoInputUsed, workflow,
         sympyBadge: recheckedSympy,
         providerUsed,
         messages: convMessages,
@@ -316,7 +318,7 @@ export const api = {
     model,
     customBaseUrl, customTransport, customVision,
     onStatus,
-    reasoning = 'off', webSearch = false, searchQuery = '',
+    reasoning = 'off', webSearch = false,
     signal,
   }) {
     const locked = isTutorModeEnabled();
@@ -348,12 +350,12 @@ export const api = {
           : buildSystemPrompt(grade, examGoal, subject, tutor ? 'tutor' : mode);
 
       const nextMsgs = [...(messages || []), { role: 'user', content: promptQ }];
-      const { text: reply, used: providerUsed, photoInputUsed } = await generateAiBrowser({
+      const { text: reply, used: providerUsed, photoInputUsed, workflow } = await generateAiBrowser({
         provider,
         apiKey,
         model,
         customBaseUrl, customTransport, customVision,
-        systemPrompt: sysPrompt, graphics: true, reasoning, webSearch, searchQuery,
+        systemPrompt: sysPrompt, graphics: true, reasoning, webSearch,
         messages: nextMsgs,
         // Images remain available to native Vision on every follow-up, not only the first turn.
         imageB64: original?.image_b64 && (original.photo_input_used === 'vision' || !original.ocr_text) ? original.image_b64 : null,
@@ -367,13 +369,14 @@ export const api = {
       checkRequestActive(signal, locked);
       nextMsgs.push({ role: 'assistant', content: reply });
       if (historyId) {
-        onStatus?.({ stage: 'saving', message: 'Сохраняем продолжение диалога…' });
+        onStatus?.({ stage: 'saving', message: 'Сохраняем продолжение диалога…', trail:workflow?.trail, elapsedMs:workflow?.elapsedMs });
         await chatStore.update(historyId, {
           messages: nextMsgs,
+          workflow: cleanWorkflow(workflow), provider_used: providerUsed,
           response_md: nextMsgs[1]?.content || reply,
         });
       }
-      return { ok: true, reply, providerUsed, photoInputUsed, messages: nextMsgs };
+      return { ok: true, reply, providerUsed, photoInputUsed, workflow, messages: nextMsgs };
     } catch (e) {
       if (e?.name === 'AbortError') return { ok: false, aborted: true, error: '' };
       return { ok: false, error: e.message };
@@ -395,7 +398,7 @@ export const api = {
     model,
     customBaseUrl, customTransport, customVision,
     onStatus,
-    reasoning = 'off', webSearch = false, searchQuery = '',
+    reasoning = 'off', webSearch = false,
     signal,
   }) {
     if (isTutorModeEnabled()) return { ...TUTOR_ONLY_ERROR };
@@ -433,13 +436,13 @@ export const api = {
       const {
         text: ansMd,
         used: providerUsed,
-        extractedPhotoText, photoInputUsed = 'none',
+        extractedPhotoText, photoInputUsed = 'none', workflow,
       } = await generateAiBrowser({
         provider,
         apiKey,
         model,
         customBaseUrl, customTransport, customVision,
-        systemPrompt: sysPrompt, graphics: true, reasoning, webSearch, searchQuery,
+        systemPrompt: sysPrompt, graphics: true, reasoning, webSearch,
         messages: [{ role: 'user', content: fullUserMsg }],
         imageB64: allImgs[0] || null,
         images: allImgs,
@@ -477,7 +480,7 @@ export const api = {
         { role: 'assistant', content: ansMd },
       ];
 
-      onStatus?.({ stage: 'saving', message: 'Ответ получен. Сохраняем в вашу тетрадь…' });
+      onStatus?.({ stage: 'saving', message: 'Ответ получен. Сохраняем в вашу тетрадь…', trail:workflow?.trail, elapsedMs:workflow?.elapsedMs });
       const saved = await chatStore.saveNew({
         item_type: 'check',
         grade,
@@ -495,6 +498,7 @@ export const api = {
         ocr_text: finalOcr,
         response_md: ansMd,
         provider_used: providerUsed,
+        workflow: cleanWorkflow(workflow),
         messages: convMessages,
       });
 
@@ -510,7 +514,7 @@ export const api = {
         markdown: ansMd,
         express: finalExpress,
         extractedPhotoText: finalOcr,
-        photoInputUsed,
+        photoInputUsed, workflow,
         mistakesAdded,
         providerUsed,
         messages: convMessages,

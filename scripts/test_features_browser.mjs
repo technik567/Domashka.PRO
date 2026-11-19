@@ -35,13 +35,16 @@ try {
  ok(await page.locator('[data-tour-layer]').count()===0 && requests.length===0,'actual highlighted Help button completes tour without an AI request');
  await page.getByRole('button',{name:'Закрыть помощника'}).click();await page.reload();
  ok(await page.getByRole('dialog',{name:'Знакомство с Домашка.ПРО'}).count()===0,'completed tutorial stays dismissed on reload for this workspace');
+ await page.getByRole('button',{name:'Настройки',exact:true}).click();await page.getByRole('radio',{name:/Продвинутый/}).check();await page.getByRole('button',{name:'Готово',exact:true}).click();
  await page.locator('#chat-builtin-model').selectOption('pollinations');
- await page.getByRole('button',{name:'Рассуждение',exact:true}).click();await page.getByRole('combobox',{name:'Глубина рассуждения'}).selectOption('high');
- ok(await page.getByRole('button',{name:'Поиск',exact:true}).isDisabled(),'secretless local build explains disabled real search');
+ await page.getByRole('combobox',{name:'Глубина рассуждения'}).selectOption('high');
+ ok(await page.getByRole('button',{name:'Интернет: авто',exact:true}).isEnabled(),'local build exposes documented keyless search permission');
+ await page.getByRole('button',{name:'Интернет: авто',exact:true}).click();
  await page.locator('[data-tour="task-input"]').fill('Покажи график y=x^2 и таблицу. PRIVATE_HOMEWORK_SENTINEL');
  await page.locator('form').filter({has:page.locator('[data-tour="task-input"]')}).locator('button[type="submit"]').click();
  await page.locator('.ai-chart').nth(1).waitFor();
  ok(await page.locator('.ai-chart svg').count()===2 && await page.locator('.md-content .katex').count()>0,'graphs, table and math render from a real mocked response under hosted CSP');
+ ok(requests.filter(r=>r.url.includes('pollinations')).length===3,'high reasoning performs a draft and two real separate mocked checks');
  const sent=JSON.parse(requests.find(r=>r.url.includes('pollinations')).body);ok(JSON.stringify(sent).includes('ПРОВЕРКА ОТВЕТА') && JSON.stringify(sent).includes('domashka-chart'),'reasoning and graphics reach the selected model transport');
  const downloadPromise=page.waitForEvent('download');await page.getByRole('button',{name:'Скачать график SVG'}).first().click();const download=await downloadPromise;await download.saveAs('.cache/answer-graph.svg');
  const svg=fs.readFileSync('.cache/answer-graph.svg','utf8');ok(svg.includes('<svg') && !/onload=|<script|<image/i.test(svg),'SVG download contains the sanitized local plot');

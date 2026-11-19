@@ -1,9 +1,11 @@
+import { getQwenDemo, callQwenDemo } from './qwenDemo';
+import { runAnswerWorkflow, WORKFLOW_TIMEOUT_MS } from './workflow';
 import { buildSiteHelpPrompt } from './helpKnowledge';
 import { getCurrentAccount } from './accounts';
 import { cloudConfigured } from '../cloud/bridge';
 import { GRAPHIC_ANSWER_PROMPT } from './answerCharts';
-import { normalizeReasoning, reasoningPrompt, reasoningInfo, rememberReasoningCapabilities, geminiThinkingConfig } from './aiModes';
-import { runWebSearch, searchContext, searchFooter } from './webSearch';
+import { reasoningInfo, rememberReasoningCapabilities, geminiThinkingConfig } from './aiModes';
+import { runWebSearch } from './webSearch';
 import { callPublicDemo } from './publicDemos';
 import { getPublicDemo, PUBLIC_DEMO_TIMEOUT_MS } from './publicModelCatalog';
 import { assertAiAllowed, subscribeAccounts } from './accounts';
@@ -706,21 +708,22 @@ export function getPhotoCapability({ provider = 'builtin', model, customVision =
   if (provider === 'gemini') return { maxImages: 4 };
   if (provider === 'openrouter') return { maxImages: isKnownOpenRouterVisionModel(model) ? 4 : 0 };
   if (provider === 'custom') return { maxImages: customVision === true ? 4 : 0 };
+  if (provider === 'builtin' && getQwenDemo(model)) return { maxImages: 0 };
   if (provider === 'builtin' && getPublicDemo(model)) return { maxImages: getPublicDemo(model).maxImages };
   return { maxImages: ['auto', 'qwen-3.5', 'qwen-2.5-vl', '', undefined].includes(model) ? 1 : 0 };
 }
 
-function modelForReasoning(options) { return options.model || (options.provider === 'gemini' ? 'gemini-2.5-flash' : options.provider === 'openrouter' ? 'openrouter/free' : 'auto'); }
-
 export async function generateAiBrowser(options) {
   assertAiAllowed();
   const locked = isTutorModeEnabled();
+  const scope = getCurrentAccount()?.id || 'guest';
   const tutorOnly = locked || options.fallbackMode === 'tutor';
   const controller = new AbortController();
   const onAbort = () => controller.abort();
+  const deadline = setTimeout(() => controller.abort(new DOMException('Общее время ожидания истекло.', 'TimeoutError')), WORKFLOW_TIMEOUT_MS);
   if (options.signal?.aborted) onAbort();
   else options.signal?.addEventListener('abort', onAbort, { once: true });
-  const stopAccounts = subscribeAccounts(() => { try { assertAiAllowed(); } catch { controller.abort(); } });
+  const stopAccounts = subscribeAccounts(() => { try { assertAiAllowed(); if ((getCurrentAccount()?.id || 'guest') !== scope) controller.abort(); } catch { controller.abort(); } });
   const unsubscribe = subscribeParentalControl(() => {
     if (isTutorModeEnabled() !== locked) controller.abort();
   });
@@ -735,28 +738,23 @@ export async function generateAiBrowser(options) {
     // Keep the original task plus the three most recent exchanges, not an ever-growing transcript.
     const messages = tutorOnly && normalized.length > 7 ? [normalized[0], ...normalized.slice(-6)] : normalized;
     if (!messages.length) throw new Error('Сообщение пустое.');
-    const reasoning = normalizeReasoning(options.reasoning);
     let effectivePrompt = tutorOnly ? buildTutorSystemPrompt({ grade: options.fallbackMeta?.grade,
       subject: SUBJECT_NAMES[options.fallbackMeta?.subject] || options.fallbackMeta?.subject }) : String(options.systemPrompt || '');
     if (options.siteHelp === true) effectivePrompt = buildSiteHelpPrompt(messages.at(-1)?.content || '', { role: getCurrentAccount()?.role, page: options.helpPage, cloudMode: cloudConfigured(), tutorOnly });
     if (options.graphics) effectivePrompt += '\n' + GRAPHIC_ANSWER_PROMPT;
-    effectivePrompt += reasoningPrompt(reasoning);
-    const sources = options.webSearch ? await runWebSearch(options.searchQuery, { signal: controller.signal, onStatus: options.onStatus, tutorOnly }) : null;
-    if (sources) effectivePrompt += searchContext(sources);
-    const result = await generateAiRequest({
-      ...options, provider, messages, tutorOnly, reasoning, systemPrompt: effectivePrompt,
-      allowLocalFallback: sources ? false : options.allowLocalFallback,
-      fallbackMode: tutorOnly ? 'tutor' : options.fallbackMode, signal: controller.signal,
+    const result = await runAnswerWorkflow({
+      options: {...options, provider, tutorOnly, fallbackMode:tutorOnly?'tutor':options.fallbackMode, signal:controller.signal},
+      messages, systemPrompt:effectivePrompt, request:generateAiRequest, search:runWebSearch,
+      contextLimit:getPublicDemo(options.model)?.maxPromptChars || 48000,
     });
-    if (sources) result.text += searchFooter(sources);
-    if (reasoning !== 'off') {
-      const local = /^(Локальн|Автономн)/.test(result.used || '');
-      result.used += local ? ' · уровень рассуждения ИИ не применялся' : ` · Рассуждение: ${reasoningInfo(provider, modelForReasoning(options), reasoning).label} (${({low:'низкий',medium:'средний',high:'высокий'})[reasoning]})`;
-    }
     throwIfUserAborted(controller.signal);
-    options.onStatus?.({ stage: 'format', message: 'Ответ получен. Обрабатываем результат…' });
+    options.onStatus?.({ stage: 'format', message: 'Ответ получен. Обрабатываем результат…', trail:result.workflow.trail, elapsedMs:result.workflow.elapsedMs });
     return result;
+  } catch(error) {
+    if (controller.signal.aborted && controller.signal.reason?.name === 'TimeoutError') throw new Error('Общее время ожидания истекло (8 минут). Запрос не повторяется; уменьшите глубину или выберите другую модель.');
+    throw error;
   } finally {
+    clearTimeout(deadline);
     stopAccounts();
     unsubscribe();
     options.signal?.removeEventListener('abort', onAbort);
@@ -808,7 +806,7 @@ async function generateAiRequest({
   const finish = (out) => ({ ...out, extractedPhotoText: resolvedOcrText, visionEngineLabel,
     photoInputUsed, photoCount: photos.length });
 
-  if (!siteHelp && canUseServerProxy() && (provider !== 'custom' || customTransport === 'server')) {
+  if (!siteHelp && !getQwenDemo(model) && canUseServerProxy() && (provider !== 'custom' || customTransport === 'server')) {
     onStatus?.({ stage: 'cloud', photoInputUsed, message: provider === 'custom'
       ? 'Ollama через ваш Python-сервер. Первая загрузка модели может занять до двух минут…'
       : provider === 'builtin' && getPublicDemo(model) ? `${getPublicDemo(model).name}: очередь и генерация через сервер, до 5 минут…`
@@ -834,6 +832,7 @@ async function generateAiRequest({
   if (provider === 'openrouter') out = await callOpenRouterBrowser(key, model || 'openrouter/free', systemPrompt, workingMsgs, nativePhotos, onStatus, signal, reasoning);
   else if (provider === 'gemini') out = await callGeminiBrowser(key, model || 'gemini-2.5-flash', systemPrompt, workingMsgs, nativePhotos, onStatus, signal, reasoning);
   else if (provider === 'custom') out = await callCustomLocalBrowser(customBaseUrl, key, model, systemPrompt, workingMsgs, nativePhotos, onStatus, signal);
+  else if (getQwenDemo(model)) out = await callQwenDemo({model,systemPrompt,messages:workingMsgs,reasoning,signal,onStatus});
   else out = await callBuiltinFreeBrowser(systemPrompt, workingMsgs, onStatus, fallbackMode,
     { ...fallbackMeta, draftText: (fallbackMeta.draftText || '') + (resolvedOcrText ? `\n${resolvedOcrText}` : '') },
     signal, model || 'auto', allowLocalFallback, nativePhotos[0] || null);

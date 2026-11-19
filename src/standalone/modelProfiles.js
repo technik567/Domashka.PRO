@@ -1,3 +1,4 @@
+import { getQwenDemo } from './qwenDemo';
 import { getPublicDemo } from './publicModelCatalog';
 
 // Editorial UI profiles, NOT measured benchmarks or promises about live gateways.
@@ -18,6 +19,8 @@ const profiles = {
 export const RATINGS_NOTE = 'Условная шкала 1–5 для ориентира, не результаты бенчмарка. Скорость и качество зависят от задачи, нагрузки и квот. Пустые кружки с «нет оценки» не означают слабую модель.';
 
 export function getModelProfile(provider, model, entry = null) {
+  const qwen = provider === 'builtin' && getQwenDemo(model);
+  if(qwen) return {...qwen, variable:false, sourceName:'Официальное демо Qwen · экспериментально'};
   const demo = provider === 'builtin' && getPublicDemo(model);
   if (demo) return { description: demo.description, ratings: demo.ratings, variable: false,
     sourceUrl: `https://huggingface.co/spaces/${demo.space}`, sourceName: demo.space, maxImages: demo.maxImages };

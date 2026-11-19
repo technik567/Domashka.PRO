@@ -1,3 +1,5 @@
+import { SimpleComposer, SimpleConversation } from './SimpleChat';
+import WorkflowPanel from './WorkflowPanel';
 import AiRequestControls, { DEFAULT_REQUEST_MODES } from './AiRequestControls';
 import BuiltinModelPicker from './BuiltinModelPicker';
 import { getPhotoInputLabel } from '../standalone/photoPayload';
@@ -34,7 +36,6 @@ import {
 } from '../api';
 import { HELP_MODES, NON_TEXTBOOK_EXAMPLES, SUBJECTS } from '../data/referenceData';
 import MarkdownMath from './MarkdownMath';
-import AiThinkingCard from './AiThinkingCard';
 import PhotoScannerBox, { stripSnippetFromField } from './PhotoScannerBox';
 import VoiceMicButton from './VoiceMicButton';
 import DrawingPadModal from './DrawingPadModal';
@@ -46,6 +47,7 @@ const MATH_SYMBOLS = ['²', '³', '√(', 'π', '°', '≤', '≥', '≠', '→'
 
 export default function HomeworkSolver({
   tutorOnly = false,
+  interfaceMode = 'advanced',
   profile,
   aiSettings,
   onOpenAiSettings,
@@ -58,11 +60,12 @@ export default function HomeworkSolver({
   onActiveChatChange,
   onLaunchQuizTopic,
 }) {
+  const basic=interfaceMode==='basic';
   const initialDraft = loadInputDraft(tutorOnly ? 'tutor' : 'solver') || {};
 
   const [requestModes, setRequestModes] = useState({ ...DEFAULT_REQUEST_MODES, ...(initialDraft.requestModes || {}) });
   const [subject, setSubject] = useState(initialDraft.subject || 'auto');
-  const [selectedMode, setSelectedMode] = useState(initialDraft.mode || 'notebook');
+  const [selectedMode, setSelectedMode] = useState(initialDraft.mode || (basic?'step_by_step':'notebook'));
   const mode = tutorOnly ? 'tutor' : selectedMode;
   const setMode = (next) => setSelectedMode(tutorOnly ? 'tutor' : next);
   const [taskText, setTaskText] = useState(initialDraft.taskText || '');
@@ -79,7 +82,7 @@ export default function HomeworkSolver({
   const [error, setError] = useState('');
 
   const [result, setResult] = useState(null); // { id, markdown, sympyBadge, providerUsed, messages }
-  const [paperView, setPaperView] = useState(tutorOnly ? 'modern' : 'notebook'); // 'modern' | 'notebook' | 'lined'
+  const [paperView, setPaperView] = useState(tutorOnly || basic ? 'modern' : 'notebook'); // 'modern' | 'notebook' | 'lined'
   const [copied, setCopied] = useState(false);
   const [speaking, setSpeaking] = useState(false);
 
@@ -159,7 +162,7 @@ export default function HomeworkSolver({
         id: loadedItem.id,
         markdown: loadedItem.response_md || '',
         sympyBadge: tutorOnly ? '' : loadedItem.sympy_badge || '',
-        providerUsed: loadedItem.provider_used || '',
+        providerUsed: loadedItem.provider_used || '', workflow:loadedItem.workflow,
         photoInputUsed: loadedItem.photo_input_used || 'none',
         messages: Array.isArray(loadedItem.messages) ? loadedItem.messages : [],
       });
@@ -277,7 +280,7 @@ export default function HomeworkSolver({
       markdown: res.markdown,
       sympyBadge: res.sympyBadge,
       providerUsed: res.providerUsed,
-      photoInputUsed: res.photoInputUsed,
+      photoInputUsed: res.photoInputUsed, workflow:res.workflow,
       messages: res.messages,
     });
     onActiveChatChange?.(res.id);
@@ -327,7 +330,7 @@ export default function HomeworkSolver({
     setResult((prev) => ({
       ...prev,
       messages: res.messages,
-      providerUsed: res.providerUsed || prev.providerUsed,
+      providerUsed: res.providerUsed || prev.providerUsed, workflow:res.workflow,
     }));
     if (action === 'question') setChatInput('');
   };
@@ -398,8 +401,13 @@ export default function HomeworkSolver({
   const currentModeObj = HELP_MODES.find((m) => m.id === mode);
 
   return (
-    <div className="space-y-5">
-      <form
+    <div className={basic?'simple-chat':'space-y-5 advanced-solver'} ref={basic?resultRef:undefined}>
+      {basic && !result && <div hidden={solving}><SimpleComposer resetSignal={resetSignal} text={taskText} onText={setTaskText} onSubmit={handleSolve} onPaste={handlePasteClipboard} textareaRef={textareaRef}
+        photos={imagesList.length?imagesList:imageBase64?[imageBase64]:[]} onPhotos={photos=>{setImagesList(photos);setImageBase64(photos[0]||'');setOcrText('');}} onBusy={setAttachmentBusy}
+        busy={solving||chatLoading||pasteBusy} photoMode={photoMode} onPhotoMode={setPhotoMode} maxImages={getPhotoCapability(authInfo).maxImages}
+        tutorOnly={tutorOnly||mode==='tutor'} grade={profile.grade} error={error} aiSettings={aiSettings} onChangeAiSettings={onChangeAiSettings} onOpenAiSettings={onOpenAiSettings} requestModes={requestModes} setRequestModes={setRequestModes}/></div>}
+      {basic && solving && <div className="simple-conversation"><div className="simple-user-message">{taskText || 'Задание на фото'}</div></div>}
+      {!basic && <form
         onSubmit={handleSolve}
         className="bg-white dark:bg-slate-900 rounded-2xl border border-indigo-200/90 dark:border-indigo-800/80 ring-1 ring-indigo-500/10 shadow-md shadow-indigo-500/5 overflow-hidden"
       >
@@ -660,24 +668,22 @@ export default function HomeworkSolver({
             </button>
           </div>
         </div>
-      </form>
+      </form>}
 
       {/* Rich Animated AI Thinking Screen (Auto-scrolled into view!) */}
       {solving && (
         <div ref={thinkingRef} className="scroll-mt-20">
-          <AiThinkingCard
-            title="ИИ-учитель разбирает ваше задание..."
-            status={aiStatus}
-            hasPhoto={Boolean(imageBase64) && !ocrText}
-            modeLabel={currentModeObj?.title}
-            onOpenSettings={onOpenAiSettings}
-            onCancel={handleCancelRequest}
-          />
+          <WorkflowPanel busy advanced={!basic} status={aiStatus} onCancel={handleCancelRequest}/>
+
         </div>
       )}
 
       {/* Solution & Interactive Chat Display */}
-      {result && !solving && (
+      {basic && result && !solving && <SimpleConversation result={result} task={taskText} photos={imagesList.length?imagesList:imageBase64?[imageBase64]:[]}
+        followups={followupMessages} chatInput={chatInput} onChatInput={setChatInput} onSend={()=>handleFollowup('question',chatInput)} chatLoading={chatLoading} status={chatStatus} onCancel={handleCancelRequest}
+        copy={handleCopy} copied={copied} speak={toggleSpeak} speaking={speaking} error={error} tutorOnly={tutorOnly||mode==='tutor'}
+        aiSettings={aiSettings} onChangeAiSettings={onChangeAiSettings} onOpenAiSettings={onOpenAiSettings} requestModes={requestModes} setRequestModes={setRequestModes}/>}
+      {!basic && result && !solving && (
         <div
           ref={resultRef}
           className="animate-fade-up bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-md overflow-hidden"
@@ -810,6 +816,7 @@ export default function HomeworkSolver({
             </div>
           </div>
 
+          {result.workflow && !chatLoading && <WorkflowPanel workflow={result.workflow} advanced/>}
           {/* Exact Math Verification Banner */}
           {mode !== 'tutor' && result.sympyBadge && (
             <div className="px-5 py-2.5 bg-emerald-50/90 dark:bg-emerald-950/40 border-b border-emerald-200 dark:border-emerald-800 text-xs text-emerald-900 dark:text-emerald-200 flex items-center gap-2">
@@ -856,11 +863,8 @@ export default function HomeworkSolver({
 
             {chatLoading && (
               <div ref={chatThinkingRef} className="mt-5 scroll-mt-20">
-                <AiThinkingCard
-                  title="ИИ-учитель отвечает на ваш вопрос..."
-                  status={chatStatus}
-                  onOpenSettings={onOpenAiSettings}
-                />
+                <WorkflowPanel busy advanced status={chatStatus} onCancel={handleCancelRequest}/>
+
               </div>
             )}
           </div>
