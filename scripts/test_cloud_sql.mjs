@@ -2,6 +2,7 @@
 // Auth/Storage infrastructure tables and JWT claims are fixtures: this does not
 // certify a deployed GoTrue/SMTP/Storage service. No network, keys or real users.
 import assert from 'node:assert/strict';
+import { testUsernameRecovery } from './test_username_sql.mjs';
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
@@ -42,7 +43,7 @@ async function child(owner, label) {
 }
 async function save(user, key, value, version = 0, id = randomUUID()) { return rpc(user,'domashka_save_document',[key,value,version,id]); }
 try {
-  await db.exec(`create role anon; create role authenticated; create schema auth; create schema storage;
+  await db.exec(`create role anon; create role authenticated; create role service_role; create schema auth; create schema storage;
     create table auth.users(id uuid primary key,email text,encrypted_password text default '',email_confirmed_at timestamptz,raw_app_meta_data jsonb default '{}',raw_user_meta_data jsonb default '{}');
     create table auth.sessions(id uuid primary key,user_id uuid,created_at timestamptz default now());
     create function auth.uid() returns uuid language sql as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
@@ -75,6 +76,38 @@ try {
   await denied('private questions cannot be selected by a child',() => as(c,() => db.query('select answers from domashka_private.card_questions')));
   await denied('private helper cannot be called to mint XP',() => as(c,() => db.query("select domashka_private.bump_stats($1,'quiz_correct',999)",[c.id])));
   await denied('direct statistics UPDATE is forbidden',() => as(c,() => db.query('update public.domashka_stats set xp=999999 where user_id=$1',[c.id])));
+
+  // Service-only search reservations: no public budget-exhaustion RPC.
+  const reserve = (user,id=randomUUID()) => as(null, () => one('select public.domashka_reserve_search($1,$2,$3) as ok',[user.id,user.session,id]),'service_role');
+  await denied('anon cannot reserve paid-provider credits', () => as(null, () => db.query('select public.domashka_reserve_search($1,$2,$3)',[p.id,p.session,randomUUID()]),'anon'));
+  await denied('authenticated users cannot exhaust the global budget directly', () => rpc(p,'domashka_reserve_search',[p.id,p.session,randomUUID()]));
+  await denied('authenticated cannot read the search ledger', () => as(p, () => db.query('select * from domashka_private.search_requests')));
+  const searchId=randomUUID(); ok((await reserve(p,searchId)).ok,'server can reserve one search for a real active actor');
+  await denied('duplicate reservation never spends twice', () => reserve(p,searchId));
+  await denied('search rejects forged session', () => reserve({...p,session:randomUUID()}));
+  await denied('unconfirmed parent cannot search', async () => reserve(await parent('search-unconfirmed',false)));
+  await denied('tutor-only child cannot search even with valid session', () => reserve(c));
+  await rpc(p,'domashka_update_child',[c.id,5,11,false,true,false,1,'auto']);
+  ok((await reserve(c)).ok,'parent-authorized normal child can search');
+  await rpc(p,'domashka_update_child',[c.id,5,11,false,false,false,2,'auto']);
+  await denied('parent AI prohibition blocks search at the server', () => reserve(c));
+  await rpc(p,'domashka_update_child',[c.id,5,11,true,true,false,3,'auto']);
+  for(let i=0;i<7;i++) await reserve(p);
+  await denied('eighth hourly reservation is the limit', () => reserve(p));
+  await db.query("insert into domashka_private.search_requests(id,user_id,created_at) select gen_random_uuid(),$1,clock_timestamp()-interval '2 hours' from generate_series(1,30)",[other.id]);
+  await denied('thirty searches in a rolling day is the limit', () => reserve(other));
+  await db.query("update public.domashka_profiles set disabled=true where id=$1",[p2.id]);
+  await denied('disabled actor cannot search', () => reserve(p2));
+  await db.query("update public.domashka_profiles set disabled=false where id=$1",[p2.id]);
+  await db.query('insert into domashka_private.revoked_sessions(id,user_id) values($1,$2)',[p2.session,p2.id]);
+  await denied('revoked actor session cannot search', () => reserve(p2));
+  await db.query('delete from domashka_private.revoked_sessions where id=$1',[p2.session]);
+  await db.query('update public.domashka_profiles set session_not_before=clock_timestamp() where id=$1',[p2.id]);
+  await denied('rotated password epoch blocks the old session for search', () => reserve(p2));
+  await db.query("update public.domashka_profiles set session_not_before='1970-01-01' where id=$1",[p2.id]);
+  await db.query('update domashka_private.search_budget set used=900');
+  await denied('global 900/month reservation budget cannot be exceeded', () => reserve(p2));
+  await db.query('update domashka_private.search_budget set used=9');
 
   const key='pref/domashka_diary_tasks_v21'; const mutation=randomUUID();
   const first=await save(c,key,JSON.stringify([{id:'task',done:false}]),0,mutation);
@@ -212,5 +245,6 @@ try {
   const pcode=(await one('select family_code from public.domashka_profiles where id=$1',[p.id])).family_code;
   await rpc(p,'domashka_rotate_sessions',[p.id]);
   await denied('otherwise-valid unused ticket is rejected after parent session rotation',() => db.query('insert into auth.users(id,email,raw_app_meta_data,raw_user_meta_data) values($1,$2,$3,$4)',[randomUUID(),`delayed.${pcode}@children.domashka.invalid`,{domashka_role:'child',domashka_parent:p.id,domashka_login:'delayed',domashka_create_ticket:delayedTicket},{name:'Delayed',grade:5,age:11}]));
+  await testUsernameRecovery({ db, as, rpc, one, ok, denied });
   console.log(`\nCloud SQL: ${checks} assertions passed. Auth/Storage/SMTP are fixtures, not a live deployment.`);
 } catch (error) { console.error('Cloud SQL FAILED:',error.message,'code:',error.code || 'assertion',error.where || ''); console.error(error.stack?.split('\n').filter((line) => !line.includes('node_modules')).slice(0,5).join('\n')); process.exitCode=1; } finally { await db.close(); }

@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { installCloudDriver } from './bridge.js';
-import { getCloudClient, getCloudConfig, cloudError, cloudFetch, cloudAuthLink, checkCloudEnvironment, claimCloudTab, releaseCloudTab } from './client.js';
+import { getCloudClient, getCloudConfig, cloudError, cloudFetch, cloudAuthLink, loginEmail, checkCloudEnvironment, claimCloudTab, releaseCloudTab } from './client.js';
+import { accountAccess, checkNewPassword } from './accountAccess.js';
 import { loadCloudCache, saveCloudCache, clearCloudCache } from './cache.js';
 import { DocumentSync } from './documentSync.js';
 import { createPhotoStore } from './photos.js';
@@ -247,25 +248,30 @@ export class CloudRuntime {
     await this.refreshFamily(); return result;
   }
   async createAccount(data) {
-    if (data.role !== 'child') throw new Error('Другой родитель регистрируется со своей почтой и вводит код привязки.');
+    if (data.role !== 'child') throw new Error('Другой родитель регистрируется со своим логином и вводит код привязки.');
+    checkNewPassword(data.password);
     const created = await this.admin({ action: 'create_child', login: data.login, password: data.password, name: data.name,
       avatar: data.avatar, grade: Number(data.grade), age: Number(data.age) });
     return this.family.children.find((child) => child.id === created.id) || created;
   }
   async resetChildPassword(id, parentPassword, password, captchaToken) {
+    checkNewPassword(password);
     await this.admin({ action: 'reset_child', childId: id, parentPassword, password, captchaToken });
   }
+  async backupStatus() { return this.rpc('domashka_backup_status'); }
+  async replaceBackupCodes(password, captchaToken) {
+    return this.request(token => accountAccess({ action: 'rotate_codes', password, captchaToken }, this.client, token));
+  }
   async changeAccountPassword(current, next, captchaToken) {
-    if (next.trim().length < 8 || next.length > 128) throw new Error('Пароль: 8–128 символов.');
+    checkNewPassword(next);
     await this.requireSaved(); const cfg = getCloudConfig();
     const verifier = createClient(cfg.url, cfg.publishableKey, { global: { fetch: cloudFetch }, auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: `domashka_verify_${crypto.randomUUID()}` } });
     try {
-      const { data, error } = await verifier.auth.signInWithPassword({ email: this.family.account.role === 'child'
-        ? `${this.family.account.login}@children.domashka.invalid` : this.family.account.login, password: current, options: { captchaToken } });
+      const { data, error } = await verifier.auth.signInWithPassword({ email: loginEmail(this.family.account.login), password: current, options: { captchaToken } });
       if (error || data.user?.id !== this.uid) throw new Error('Текущий пароль не подтверждён.');
       this.assertActive(); await this.requireSaved();
       this.transitioning = true; emit(this.accountListeners);
-      const result = await verifier.auth.updateUser({ password: next }); if (result.error) throw cloudError(result.error);
+      const result = await verifier.auth.updateUser({ password: next, current_password: current }); if (result.error) throw cloudError(result.error);
       // The Auth trigger invalidates every previous app session. Re-login is
       // deliberate (CAPTCHA tokens cannot be reused for a second sign-in).
       this.transitioning = true; emit(this.accountListeners); await this.client.auth.signOut({ scope: 'local' });

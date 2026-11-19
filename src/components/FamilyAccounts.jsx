@@ -12,6 +12,7 @@ import CloudRoot, { CloudCaptcha } from './CloudAccess';
 import { cloud, cloudConfigured } from '../cloud/bridge';
 import { BUILTIN_MODELS } from '../standalone/modelCatalog';
 import ModelInfoCard from './ModelInfoCard';
+import CloudRecoverySettings from './CloudRecoverySettings';
 import WorkspaceTransfer from './WorkspaceTransfer';
 
 const field = 'mt-1 w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500';
@@ -86,6 +87,7 @@ function Registration({ first = false, onCreated }) {
       <label className="text-xs font-semibold">Новый пароль<input className={field} type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} maxLength={128} autoComplete="new-password" /></label>
       <label className="text-xs font-semibold">Повторите пароль<input className={field} type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required minLength={8} maxLength={128} autoComplete="new-password" /></label>
     </div>
+    {cloudConfigured() && <p className="text-xs text-slate-500">Облачный пароль: минимум 8 символов, максимум 72 байта UTF-8 (до 72 латинских символов).</p>}
     <AvatarPicker value={avatar} onChange={setAvatar} />
     {role === 'child' ? <GradeAge grade={grade} age={age} onGrade={setGrade} onAge={setAge} /> : <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-3 space-y-2">
       <label className="block text-sm font-bold">Вопрос для родителя: √{challenge?.square || '…'} = ?<input type="text" inputMode="numeric" className={field} value={answer} onChange={(e) => setAnswer(e.target.value)} required autoComplete="off" aria-label="Ответ на вопрос для родителя" /></label>
@@ -160,6 +162,7 @@ function PersonalSettings({ account }) {
     }}>
       <label className="block text-xs font-semibold">Текущий пароль<input type="password" className={field} value={current} onChange={(e) => setCurrent(e.target.value)} autoComplete="current-password" required /></label>
       <div className="grid sm:grid-cols-2 gap-3"><label className="text-xs font-semibold">Новый пароль<input type="password" className={field} value={next} onChange={(e) => setNext(e.target.value)} minLength={8} maxLength={128} autoComplete="new-password" required /></label><label className="text-xs font-semibold">Повтор нового пароля<input type="password" className={field} value={confirm} onChange={(e) => setConfirm(e.target.value)} minLength={8} maxLength={128} autoComplete="new-password" required /></label></div>
+      {cloudConfigured() && <p className="text-xs text-slate-500">Облачный пароль: минимум 8 символов, максимум 72 байта UTF-8 (до 72 латинских символов).</p>}
       {cloudConfigured() && <CloudCaptcha onToken={setCaptcha} reset={captchaReset} />}
       <button className={primary} disabled={busy}>{busy ? 'Меняем пароль…' : 'Сменить мой пароль'}</button>
     </form>
@@ -206,6 +209,7 @@ function ChildSettings({ child, parents }) {
       <label className="block text-xs font-semibold">Ваш родительский пароль<input type="password" className={field} value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} required autoComplete="current-password" /></label>
       <label className="block text-xs font-semibold">Новый пароль ребёнка<input type="password" className={field} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} minLength={8} maxLength={128} required autoComplete="new-password" /></label>
       <label className="block text-xs font-semibold">Повтор пароля ребёнка<input type="password" className={field} value={confirm} onChange={(e) => setConfirm(e.target.value)} minLength={8} maxLength={128} required autoComplete="new-password" /></label>
+      {cloudConfigured() && <p className="text-xs text-slate-500">Облачный пароль: минимум 8 символов, максимум 72 байта UTF-8 (до 72 латинских символов).</p>}
       {cloudConfigured() && <CloudCaptcha onToken={setCaptcha} reset={captchaReset} />}
       <button className={primary} disabled={busy}>Сменить пароль ребёнка</button>
     </form>
@@ -246,7 +250,7 @@ export default function FamilyAccounts() {
   if (account.role === 'child') return <div className="space-y-5">
     <div className={`${card} flex gap-3 items-center`}><Avatar value={account.avatar} /><div><h1 className="text-xl font-extrabold">Привет, {account.name}!</h1><p className="text-xs text-slate-500">{account.grade} класс · {account.age} лет · задания и обратная связь от родителей</p></div></div>
     {!account.policy.allowAi && <p className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 text-sm text-amber-800 dark:text-amber-200">ИИ отключён родителем. Можно читать материалы, вести дневник и отправлять выполненную домашку.</p>}
-    <FamilyHomeworkBoard /><PersonalSettings account={account} /><WorkspaceTransfer />
+    <FamilyHomeworkBoard /><PersonalSettings account={account} />{cloudConfigured() && account.role === 'parent' && <CloudRecoverySettings account={account} />}<WorkspaceTransfer />
     <p className="text-xs text-slate-500">Класс, режим обучения и настройки ИИ меняет родитель. Для этого нужно выйти и войти под родительским логином.</p>
   </div>;
   return <div className="space-y-5">
@@ -267,8 +271,8 @@ export default function FamilyAccounts() {
       </> : <div className={`${card} text-sm text-slate-500`}>Здесь появятся задания и настройки выбранного ребёнка.</div>}</div>
     </div>
     <details className={card} open={!children.length}><summary className="font-bold cursor-pointer inline-flex items-center gap-2"><UserPlus className="w-4 h-4" />{cloudConfigured() ? 'Добавить ребёнка' : 'Добавить ребёнка или родителя'}</summary><div className="pt-4"><Registration onCreated={(created) => { if (created.role === 'child') setSelectedId(created.id); }} /></div></details>
-    <PersonalSettings account={account} /><WorkspaceTransfer />
+    <PersonalSettings account={account} />{cloudConfigured() && account.role === 'parent' && <CloudRecoverySettings account={account} />}<WorkspaceTransfer />
     {isLegacyOwner() && <Migration account={account} children={children} />}
-    <p className="text-xs leading-relaxed text-slate-500">{cloudConfigured() ? 'Перед передачей устройства ребёнку выходите. У родителя есть восстановление через почту; пароль ребёнка меняет связанный родитель. Изменения прав защищены сервером, но это не блокировка других сайтов и приложений. API-ключи и неотправленные черновики остаются на устройстве.' : 'После передачи устройства ребёнку выходите из аккаунта. Сеанс длится до 8 часов и закрывается при выходе, блокировке или смене пароля. Сохраните родительский пароль в безопасном месте: восстановления через почту нет. Локальные материалы и настройки не зашифрованы на диске.'}</p>
+    <p className="text-xs leading-relaxed text-slate-500">{cloudConfigured() ? 'Перед передачей устройства ребёнку выходите. У родителя есть 10 одноразовых резервных кодов для восстановления без почты; пароль ребёнка меняет связанный родитель. Изменения прав защищены сервером, но это не блокировка других сайтов и приложений. API-ключи и неотправленные черновики остаются на устройстве.' : 'После передачи устройства ребёнку выходите из аккаунта. Сеанс длится до 8 часов и закрывается при выходе, блокировке или смене пароля. Сохраните родительский пароль в безопасном месте: восстановления через почту нет. Локальные материалы и настройки не зашифрованы на диске.'}</p>
   </div>;
 }

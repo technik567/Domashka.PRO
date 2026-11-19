@@ -53,6 +53,34 @@ describe('immutable cloud runtime identity', () => {
   });
 });
 
+describe('cloud password consistency', () => {
+  it.each(['create_child','reset_child'])('validates %s by UTF-8 bytes before sending secrets to the server', async action => {
+    window.__DOMASHKA_CLOUD__=config; const {CloudRuntime}=await import('../src/cloud/runtime');
+    const runtime=new CloudRuntime(uid,fakeClient({user:{id:uid},access_token:jwt()}),sid);
+    runtime.family={children:[]}; runtime.admin=vi.fn(async () => ({id:'fixture-child'}));
+    const call=password => action==='create_child' ? runtime.createAccount({role:'child',login:'pupil',password}) : runtime.resetChildPassword('fixture-child','Parent-fixture-123',password,'fixture-captcha');
+    await expect(call('я'.repeat(37))).rejects.toThrow(/72/); expect(runtime.admin).not.toHaveBeenCalled();
+    const password='я'.repeat(36); await call(password);
+    expect(runtime.admin).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({action,password}));
+  });
+  it('sends the current password to Auth updateUser after separate reauthentication without keeping that session', async () => {
+    window.__DOMASHKA_CLOUD__=config;
+    const verifier={auth:{signInWithPassword:vi.fn(async () => ({data:{user:{id:uid}},error:null})),
+      updateUser:vi.fn(async () => ({error:null})),signOut:vi.fn(async () => ({error:null}))}};
+    vi.doMock('@supabase/supabase-js',() => ({createClient:vi.fn(() => verifier)}));
+    try {
+      const {CloudRuntime}=await import('../src/cloud/runtime');
+      const client=fakeClient({user:{id:uid},access_token:jwt()});const runtime=new CloudRuntime(uid,client,sid);
+      runtime.family={account:{login:'parent_one'}};runtime.requireSaved=vi.fn(async () => {});
+      await runtime.changeAccountPassword('Current-fixture-123','New-fixture-123','fixture-captcha');
+      expect(verifier.auth.signInWithPassword).toHaveBeenCalledWith({email:'parent_one@parents.domashka.invalid',password:'Current-fixture-123',options:{captchaToken:'fixture-captcha'}});
+      expect(verifier.auth.updateUser).toHaveBeenCalledWith({password:'New-fixture-123',current_password:'Current-fixture-123'});
+      expect(verifier.auth.signOut).toHaveBeenCalledWith({scope:'local'});expect(client.auth.signOut).toHaveBeenCalledWith({scope:'local'});
+      expect(runtime.transitioning).toBe(true);expect(runtime.requireSaved).toHaveBeenCalledTimes(2);
+    } finally {vi.doUnmock('@supabase/supabase-js');vi.resetModules();}
+  });
+});
+
 describe('explicit study-data transfer', () => {
   it('does not include local credentials, sessions or AI keys in an exported study file', async () => {
     let accounts=await import('../src/standalone/accounts'); const challenge=accounts.issueParentChallenge();

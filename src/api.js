@@ -207,6 +207,7 @@ export const api = {
     model,
     customBaseUrl, customTransport, customVision,
     onStatus,
+    reasoning = 'off', webSearch = false, searchQuery = '',
     signal,
   }) {
     const locked = isTutorModeEnabled();
@@ -238,7 +239,7 @@ export const api = {
         apiKey,
         model,
         customBaseUrl, customTransport, customVision,
-        systemPrompt: sysPrompt,
+        systemPrompt: sysPrompt, graphics: true, reasoning, webSearch, searchQuery,
         messages: [{ role: 'user', content: userPrompt }],
         imageB64: allImgs[0] || null,
         images: allImgs,
@@ -315,6 +316,7 @@ export const api = {
     model,
     customBaseUrl, customTransport, customVision,
     onStatus,
+    reasoning = 'off', webSearch = false, searchQuery = '',
     signal,
   }) {
     const locked = isTutorModeEnabled();
@@ -351,7 +353,7 @@ export const api = {
         apiKey,
         model,
         customBaseUrl, customTransport, customVision,
-        systemPrompt: sysPrompt,
+        systemPrompt: sysPrompt, graphics: true, reasoning, webSearch, searchQuery,
         messages: nextMsgs,
         // Images remain available to native Vision on every follow-up, not only the first turn.
         imageB64: original?.image_b64 && (original.photo_input_used === 'vision' || !original.ocr_text) ? original.image_b64 : null,
@@ -393,6 +395,7 @@ export const api = {
     model,
     customBaseUrl, customTransport, customVision,
     onStatus,
+    reasoning = 'off', webSearch = false, searchQuery = '',
     signal,
   }) {
     if (isTutorModeEnabled()) return { ...TUTOR_ONLY_ERROR };
@@ -436,7 +439,7 @@ export const api = {
         apiKey,
         model,
         customBaseUrl, customTransport, customVision,
-        systemPrompt: sysPrompt,
+        systemPrompt: sysPrompt, graphics: true, reasoning, webSearch, searchQuery,
         messages: [{ role: 'user', content: fullUserMsg }],
         imageB64: allImgs[0] || null,
         images: allImgs,

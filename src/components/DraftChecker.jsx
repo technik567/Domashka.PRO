@@ -1,3 +1,5 @@
+import BuiltinModelPicker from './BuiltinModelPicker';
+import AiRequestControls, { DEFAULT_REQUEST_MODES } from './AiRequestControls';
 import { getPhotoInputLabel } from '../standalone/photoPayload';
 import { getPhotoCapability } from '../standalone/aiClient';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -86,7 +88,7 @@ const SAMPLE_DRAFTS = [
 export default function DraftChecker({
   profile,
   aiSettings,
-  onOpenAiSettings,
+  onOpenAiSettings, onChangeAiSettings,
   loadedItem,
   clearLoadedItem,
   resetSignal = 0,
@@ -94,6 +96,7 @@ export default function DraftChecker({
   onOpenMistakeBank,
 }) {
   const saved = loadInputDraft('checker') || {};
+  const [requestModes, setRequestModes] = useState({ ...DEFAULT_REQUEST_MODES, ...(saved.requestModes || {}) });
 
   const [checkType, setCheckType] = useState(saved.checkType || 'general');
   const [conditionText, setConditionText] = useState(saved.conditionText || '');
@@ -140,8 +143,8 @@ export default function DraftChecker({
   useEffect(() => () => { pasteVersion.current++; }, []);
 
   useEffect(() => {
-    saveInputDraft('checker', { checkType, conditionText, draftText, photoMode });
-  }, [checkType, conditionText, draftText, photoMode]);
+    saveInputDraft('checker', { checkType, conditionText, draftText, photoMode, requestModes });
+  }, [checkType, conditionText, draftText, photoMode, requestModes]);
 
   // Reset on "+ Новое задание / чат"
   useEffect(() => {
@@ -288,7 +291,7 @@ export default function DraftChecker({
       imagesList,
       ocrText,
       photoMode,
-      ...authInfo,
+      ...authInfo, ...requestModes,
       signal: ctrl.signal,
       onStatus: (st) => setAiStatus(st),
     });
@@ -387,6 +390,10 @@ export default function DraftChecker({
         onSubmit={handleCheck}
         className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden"
       >
+        <div className="p-4 sm:p-6 pb-0">
+          <BuiltinModelPicker settings={aiSettings} onChange={onChangeAiSettings} disabled={checking || chatLoading} onOpenSettings={onOpenAiSettings} tools={<AiRequestControls settings={aiSettings} value={requestModes} onChange={setRequestModes} disabled={checking || chatLoading} />} />
+          {aiSettings.provider !== 'builtin' && <AiRequestControls settings={aiSettings} value={requestModes} onChange={setRequestModes} disabled={checking || chatLoading} />}
+        </div>
         {/* Header & Mode Selector */}
         <div className="p-4 sm:p-6 border-b border-slate-100 dark:border-slate-800 space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2">

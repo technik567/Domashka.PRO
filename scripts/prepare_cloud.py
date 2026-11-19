@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Cloudflare Pages files from the standalone HTML + PUBLIC environment.
+"""Build Cloudflare static assets (Workers/Pages) from the standalone HTML + PUBLIC environment.
 
 No Supabase admin key or SMTP credential belongs in this build. The original
 tracked/downloadable HTML stays local and is copied unmodified for download.
@@ -11,9 +11,11 @@ import os
 from pathlib import Path
 import re
 import shutil
+import zipfile
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
+PUBLIC_DOCS = ('USER_GUIDE.md','USER_GUIDE.txt','REFERENCE_COVERAGE.md','docs/CLOUD_SETUP.md','docs/CLOUD_LAUNCH.md','docs/PUBLIC_DEMOS.md','docs/QA_4.2.md','docs/QA_4.3.md','docs/AI_FEATURES.md','docs/AUTH_USERNAME.md')
 
 
 def public_config(environ=None):
@@ -37,9 +39,9 @@ def public_config(environ=None):
     if not is_public:
         raise ValueError('Разрешён только publishable / anon ключ. Никогда service_role / secret.')
     host = urlsplit(site)
-    if (host.scheme != 'https' or not host.hostname or host.username or host.password or host.query or host.fragment
-            or host.hostname.endswith('.github.io') or host.hostname in ('localhost', '127.0.0.1')):
-        raise ValueError('DOMASHKA_SITE_URL: нужен публичный HTTPS-адрес Cloudflare Pages/своего сайта, не GitHub Pages.')
+    if site != 'auto' and (host.scheme != 'https' or not host.hostname or host.username or host.password or host.query or host.fragment
+            or host.hostname.endswith('.github.io') or host.hostname in ('github.io', 'localhost', '127.0.0.1', '::1')):
+        raise ValueError('DOMASHKA_SITE_URL: нужен публичный HTTPS-адрес Cloudflare Workers/Pages/своего сайта, не GitHub Pages.')
     if captcha and not re.fullmatch(r'[A-Za-z0-9_-]{10,200}', captcha):
         raise ValueError('DOMASHKA_TURNSTILE_SITE_KEY: нужен публичный site key, не секрет CAPTCHA.')
     return {'url': url, 'publishableKey': key, 'siteUrl': site, 'captchaSiteKey': captcha}
@@ -73,7 +75,7 @@ def prepare_cloud(output_dir, source_file=ROOT / 'Domashka_PRO.html', environ=No
     (output / 'index.html').write_text(configured, encoding='utf-8')
     shutil.copyfile(source, output / 'Domashka_PRO.html')
     (output / '_headers').write_text(HEADERS, encoding='utf-8')
-    for guide in ('USER_GUIDE.md', 'USER_GUIDE.txt', 'REFERENCE_COVERAGE.md', 'docs/CLOUD_SETUP.md', 'docs/CLOUD_LAUNCH.md', 'docs/PUBLIC_DEMOS.md', 'docs/QA_4.2.md'):
+    for guide in PUBLIC_DOCS:
         if (ROOT / guide).is_file():
             (output / guide).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / guide, output / guide)
@@ -82,11 +84,19 @@ def prepare_cloud(output_dir, source_file=ROOT / 'Domashka_PRO.html', environ=No
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--zip', type=Path, help='ZIP для загрузки статических файлов в Cloudflare Workers/Pages (не локальный Portable ZIP).')
     parser.add_argument('--output', type=Path, default=ROOT / '.cache' / 'cloud-site')
     args = parser.parse_args()
     output = prepare_cloud(args.output)
+    if args.zip:
+        with zipfile.ZipFile(args.zip, 'w', compression=zipfile.ZIP_DEFLATED) as package:
+            for relative in ('index.html','_headers','Domashka_PRO.html',*PUBLIC_DOCS):
+                file = output / relative
+                if file.is_file():
+                    package.write(file, arcname=file.relative_to(output))
+        print(f'Пакет Cloudflare static assets: {args.zip}')
     print(f'Облачная статическая сборка готова: {output}')
-    print('Это НЕ deployment и НЕ проверка Supabase/почты. Загрузите папку в Cloudflare Pages после серверной настройки.')
+    print('Это НЕ deployment и НЕ проверка Supabase/Turnstile. Загрузите файлы в свой Cloudflare Workers/Pages-проект после серверной настройки.')
 
 
 if __name__ == '__main__':

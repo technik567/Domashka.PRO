@@ -1,3 +1,4 @@
+import { compileMathExpression } from '../standalone/mathExpression';
 import React, { useMemo, useState } from 'react';
 import {
   Calculator,
@@ -148,27 +149,7 @@ const TOOLS = [
   },
 ];
 
-function compileMathFn(rawExpr) {
-  let s = (rawExpr || '')
-    .replace(/^y\s*=\s*/i, '')
-    .replace(/^f\s*\(\s*x\s*\)\s*=\s*/i, '')
-    .replace(/,/g, '.')
-    .replace(/²/g, '^2')
-    .replace(/³/g, '^3')
-    .replace(/\^/g, '**')
-    .replace(/(\d)\s*([xX(])/g, '$1*$2')
-    .replace(/\b(sin|cos|tan|sqrt|abs|log|exp)\b/gi, (m) => `Math.${m.toLowerCase()}`)
-    .replace(/\bpi\b|π/gi, 'Math.PI');
-
-  if (!/^[0-9xX+\-*/().\sMathPIEincosqrtablgxp]+$/.test(s)) {
-    throw new Error('Недопустимые символы в формуле функции.');
-  }
-  // eslint-disable-next-line no-new-func
-  const fn = new Function('x', `"use strict"; return (${s.replace(/X/g, 'x')});`);
-  // test call
-  fn(1);
-  return fn;
-}
+const compileMathFn = (rawExpr) => compileMathExpression(String(rawExpr || '').replace(/,/g, '.'));
 
 function FunctionPlotCard({ exprInput }) {
   const data = useMemo(() => {

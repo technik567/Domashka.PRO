@@ -7,8 +7,8 @@ const dimensions = [
   { label: 'Понимание', color: 'bg-sky-500', hint: 'Условная пригодность для контекста и объяснений, не объективное измерение интеллекта.' },
 ];
 
-export default function ModelInfoCard({ provider, model, entry, showNote = true }) {
-  const profile = getModelProfile(provider, model, entry);
+export default function ModelInfoCard({ provider, model, entry, showNote = true, profile: providedProfile }) {
+  const profile = providedProfile || getModelProfile(provider, model, entry);
   return <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/70 p-3 space-y-2.5 min-w-0">
     <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-300 break-words">{profile.description}</p>
     <div className="grid gap-1.5">

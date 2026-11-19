@@ -1,3 +1,4 @@
+import AiRequestControls, { DEFAULT_REQUEST_MODES } from './AiRequestControls';
 import BuiltinModelPicker from './BuiltinModelPicker';
 import { getPhotoInputLabel } from '../standalone/photoPayload';
 import { getPhotoCapability } from '../standalone/aiClient';
@@ -59,6 +60,7 @@ export default function HomeworkSolver({
 }) {
   const initialDraft = loadInputDraft(tutorOnly ? 'tutor' : 'solver') || {};
 
+  const [requestModes, setRequestModes] = useState({ ...DEFAULT_REQUEST_MODES, ...(initialDraft.requestModes || {}) });
   const [subject, setSubject] = useState(initialDraft.subject || 'auto');
   const [selectedMode, setSelectedMode] = useState(initialDraft.mode || 'notebook');
   const mode = tutorOnly ? 'tutor' : selectedMode;
@@ -116,8 +118,8 @@ export default function HomeworkSolver({
 
   // Auto-save unsent draft locally whenever student types
   useEffect(() => {
-    saveInputDraft(tutorOnly ? 'tutor' : 'solver', { subject, mode, taskText, photoMode });
-  }, [subject, mode, taskText, photoMode]);
+    saveInputDraft(tutorOnly ? 'tutor' : 'solver', { subject, mode, taskText, photoMode, requestModes });
+  }, [subject, mode, taskText, photoMode, requestModes]);
 
   // Sync default paper style when subject changes
   useEffect(() => {
@@ -250,7 +252,7 @@ export default function HomeworkSolver({
       imagesList,
       ocrText,
       photoMode,
-      ...authInfo,
+      ...authInfo, ...requestModes, webSearch: !(tutorOnly || mode === 'tutor') && requestModes.webSearch,
       signal: ctrl.signal,
       onStatus: (st) => setAiStatus(st),
     });
@@ -306,7 +308,7 @@ export default function HomeworkSolver({
       messages: result.messages || [],
       action,
       question: customQuestion,
-      ...authInfo,
+      ...authInfo, ...requestModes, webSearch: !(tutorOnly || mode === 'tutor') && requestModes.webSearch,
       signal: ctrl.signal,
       onStatus: (st) => setChatStatus(st),
     });
@@ -514,7 +516,9 @@ export default function HomeworkSolver({
           </div>
         </div>
 
-        <div className="px-4 sm:px-6 pb-4 pt-3"><BuiltinModelPicker settings={aiSettings} onChange={onChangeAiSettings} disabled={solving || chatLoading} tutorOnly={tutorOnly} onOpenSettings={onOpenAiSettings} /></div>
+        <div className="px-4 sm:px-6 pb-4 pt-3"><BuiltinModelPicker settings={aiSettings} onChange={onChangeAiSettings} disabled={solving || chatLoading} tutorOnly={tutorOnly} onOpenSettings={onOpenAiSettings} tools={<AiRequestControls settings={aiSettings} value={requestModes} onChange={setRequestModes} disabled={solving || chatLoading} tutorOnly={tutorOnly || mode === 'tutor'} />} />
+          {aiSettings.provider !== 'builtin' && <AiRequestControls settings={aiSettings} value={requestModes} onChange={setRequestModes} disabled={solving || chatLoading} tutorOnly={tutorOnly || mode === 'tutor'} />}
+        </div>
 
         {/* STEP 2: Task Input + Voice + Photo Scanner */}
         <div className="p-4 sm:p-6 space-y-4">
@@ -557,7 +561,7 @@ export default function HomeworkSolver({
 
           {/* Textarea + Quick Math / Russian Parsing Toolbar */}
           <div className="space-y-2">
-            <textarea
+            <textarea data-tour="task-input"
               ref={textareaRef}
               rows={4}
               value={taskText}

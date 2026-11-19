@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
-import { marked } from 'marked';
+import { marked, Renderer } from 'marked';
+import { renderChartHtml } from '../standalone/answerCharts';
 import katex from 'katex';
 import DOMPurify from 'dompurify';
 import 'katex/dist/katex.min.css';
@@ -11,7 +12,7 @@ marked.setOptions({
 
 const useIsoLayoutEffect = typeof window !== 'undefined' ? useLayoutEffect : useEffect;
 
-export function renderMarkdownWithMath(rawText) {
+export function renderMarkdownWithMath(rawText, { disableLinks = false } = {}) {
   if (!rawText) return '';
 
   const mathBlocks = [];
@@ -37,7 +38,7 @@ export function renderMarkdownWithMath(rawText) {
         })
       );
     } catch {
-      mathBlocks.push(`<code>${formula}</code>`);
+      mathBlocks.push(`<code>${formula.replace(/[&<>]/g,(c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}</code>`);
     }
     return placeholder(idx);
   });
@@ -54,7 +55,7 @@ export function renderMarkdownWithMath(rawText) {
         })
       );
     } catch {
-      mathBlocks.push(`<code>${formula}</code>`);
+      mathBlocks.push(`<code>${formula.replace(/[&<>]/g,(c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}</code>`);
     }
     return placeholder(idx);
   });
@@ -63,12 +64,23 @@ export function renderMarkdownWithMath(rawText) {
   text = text.replace(/@@CODE_TOKEN_(\d+)@@/g, (_, idx) => codeBlocks[Number(idx)] || '');
 
   // Parse Markdown
-  let html = marked.parse(text);
+  const renderer = new Renderer();
+  const code = renderer.code.bind(renderer); const table = renderer.table.bind(renderer);
+  if (disableLinks) renderer.link = (token) => renderer.parser.parseInline(token.tokens);
+  renderer.html = () => ''; // Raw model HTML is not an application UI.
+  renderer.image = () => '<span>[Внешнее изображение не загружается автоматически]</span>';
+  let chartCount = 0;
+  renderer.code = (token) => {
+    if (!/^(domashka-chart|chart|plot)$/.test((token.lang || '').trim())) return code(token);
+    return chartCount++ < 4 ? renderChartHtml(token.text) : '<p>Показаны первые четыре графика. Остальные сохранены в тексте ответа.</p>';
+  };
+  renderer.table = (token) => `<div class="table-scroll" role="region" aria-label="Таблица ответа" tabindex="0">${table(token)}</div>`;
+  let html = marked.parse(text, { renderer });
 
   // Restore rendered KaTeX HTML
   html = html.replace(/@@KATEX_TOKEN_(\d+)@@/g, (_, idx) => mathBlocks[Number(idx)] || '');
 
-  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true, mathMl: true, svg: true } });
+  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true, mathMl: true, svg: true }, FORBID_TAGS: ['img','image','use','foreignObject','iframe','form','input','textarea','select'] });
 }
 
 /**
@@ -167,8 +179,8 @@ function snapNotebookBaseline(rootEl) {
   }
 }
 
-export default function MarkdownMath({ content, className = '' }) {
-  const html = useMemo(() => renderMarkdownWithMath(content), [content]);
+export default function MarkdownMath({ content, disableLinks = false, className = '' }) {
+  const html = useMemo(() => renderMarkdownWithMath(content, { disableLinks }), [content, disableLinks]);
   const rootRef = useRef(null);
 
   useIsoLayoutEffect(() => {
@@ -188,6 +200,15 @@ export default function MarkdownMath({ content, className = '' }) {
     <div
       ref={rootRef}
       className={`md-content ${className}`}
+      onClick={(event) => {
+        const button = event.target.closest?.('[data-chart-download="svg"]');
+        if (!button || !rootRef.current?.contains(button)) return;
+        const svg = button.closest('.ai-chart')?.querySelector('svg');
+        if (!svg) return;
+        const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: 'image/svg+xml;charset=utf-8' }));
+        const link = document.createElement('a'); link.href = url; link.download = 'Domashka_graph.svg'; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );

@@ -195,6 +195,7 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                     tutor_grade=data.get("tutorGrade", 8),
                     tutor_subject=data.get("tutorSubject", "auto"),
                     vision_capable=data.get("supportsVision"),
+                    reasoning=data.get("reasoning", "off"), graphics=data.get("graphics") is True, reasoning_native=data.get("reasoningNative") is True,
                 )
                 final_used = f"{provider_used} + {vision_label}" if (vision_label and vision_label not in provider_used) else provider_used
                 self._send_json(

@@ -1,3 +1,5 @@
+import SiteAssistant from './components/SiteAssistant';
+import GuidedTour from './components/GuidedTour';
 import React, { useEffect, useState } from 'react';
 import {
   Sparkles,
@@ -79,6 +81,7 @@ const SECONDARY_SECTIONS = [
 ];
 
 export default function App() {
+  const [tourReplay, setTourReplay] = useState(0);
   const [activeTab, setActiveTab] = useState(() => getCurrentAccount()?.role === 'parent' ? 'family' : 'solver');
   const managedChild = getManagedChild();
   const [profile, setProfile] = useState(() => loadStudentProfile());
@@ -115,6 +118,8 @@ export default function App() {
     setActiveChatId(null); setSettingsOpen(false); setSidebarMobileOpen(false);
     window.speechSynthesis?.cancel();
   }, [tutorOnly]);
+
+  const navigateHelp = (section) => { setSidebarMobileOpen(false); setActiveTab(tutorOnly && !['family','diary','cheats','solver'].includes(section) ? 'solver' : section); };
 
   function openAiSettings() {
     if (managedChild) { setActiveTab('family'); return; }
@@ -319,7 +324,7 @@ export default function App() {
             <button
               type="button"
               onClick={openAiSettings}
-              aria-label="Выбрать нейросеть"
+              data-tour="ai-settings" aria-label="Выбрать нейросеть"
               title={providerBadgeLabel}
               className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1.5 transition"
             >
@@ -351,7 +356,7 @@ export default function App() {
           </div>
         </div>
       </header>
-      <FamilyAccountBar onOpen={() => setActiveTab('family')} />
+      <div data-tour="account-bar"><FamilyAccountBar onOpen={() => setActiveTab('family')} /></div>
       {managedChild?.policy.allowAi === false && <div className="bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 p-2 text-center text-xs">ИИ и OCR отключены родителем. Семейные задания, дневник и локальные материалы доступны.</div>}
 
       {tutorOnly && <div className="no-print px-4 py-2.5 bg-emerald-50 dark:bg-emerald-950/50 border-b border-emerald-200 dark:border-emerald-900 text-emerald-900 dark:text-emerald-200 text-xs flex flex-wrap items-center justify-center gap-2"><ShieldCheck className="w-4 h-4" /><strong>Детский режим: только репетитор.</strong><span>Сначала твоя попытка, затем подсказка. Обычные чаты сохранены и скрыты.</span><button type="button" onClick={() => managedChild ? setActiveTab('family') : setParentOpen(true)} className="font-bold underline underline-offset-2">Для родителей</button></div>}
@@ -381,7 +386,7 @@ export default function App() {
           onCountChange={setChatCount}
         />
 
-        <main className="flex-1 min-w-0 px-2.5 sm:px-6 pt-3 sm:pt-6 pb-20 md:pb-6">
+        <main data-tour="workspace" className="flex-1 min-w-0 px-2.5 sm:px-6 pt-3 sm:pt-6 pb-20 md:pb-6">
           <div className="max-w-4xl mx-auto space-y-4 sm:space-y-5">
             {/* Desktop/Tablet Section Navigation Bar (mobile uses sticky thumb bar at bottom!) */}
             <nav
@@ -461,6 +466,7 @@ export default function App() {
                   profile={profile}
                   aiSettings={aiSettings}
                   onOpenAiSettings={openAiSettings}
+                  onChangeAiSettings={managedChild ? undefined : handleSaveAi}
                   loadedItem={loadedItem}
                   clearLoadedItem={() => setLoadedItem(null)}
                   resetSignal={resetSignal}
@@ -562,6 +568,8 @@ export default function App() {
         })}
       </nav>
 
+      <SiteAssistant page={activeTab} onNavigate={navigateHelp} onReplayTour={() => setTourReplay((n) => n+1)} />
+      <GuidedTour role={getCurrentAccount()?.role || 'guest'} cloudMode={cloudConfigured()} tutorOnly={tutorOnly} allowAi={managedChild?.policy.allowAi !== false} replay={tourReplay} onNavigate={navigateHelp} />
       <ParentModeModal isOpen={parentOpen} onClose={() => setParentOpen(false)} status={parentStatus} />
       <AiSettingsModal
         isOpen={settingsOpen && !tutorOnly}

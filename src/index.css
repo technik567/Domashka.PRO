@@ -488,3 +488,24 @@
     border: none !important;
   }
 }
+
+/* Generated chart markup is numeric SVG only, no executable model code. */
+.md-content .table-scroll { max-width:100%; overflow-x:auto; overscroll-behavior-x:contain; margin:1em 0; border:1px solid #94a3b84d; border-radius:12px; }
+.md-content .table-scroll table { margin:0; min-width:24rem; width:100%; }
+.md-content .ai-chart { border:1px solid #818cf866; border-radius:18px; padding:14px; margin:1.2em 0; background:linear-gradient(145deg,#818cf80a,#34d39909); break-inside:avoid; }
+.md-content .ai-chart figcaption { font-weight:800; overflow-wrap:anywhere; }
+.md-content .ai-chart svg { width:100%; max-width:640px; height:auto; display:block; margin:12px auto; }
+.md-content .ai-chart-legend { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; }
+.md-content .ai-chart-legend span { overflow-wrap:anywhere; }
+.md-content .ai-chart-legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:5px; }
+.md-content .ai-chart-note { font-size:12px; line-height:1.6; opacity:.8; }
+.md-content .ai-chart-download { border:1px solid #818cf8; padding:6px 12px; border-radius:8px; font:inherit; font-size:12px; cursor:pointer; }
+.md-content .ai-chart details { margin-top:12px; font-size:12px; }
+.md-content .ai-chart-error { padding:12px; border-radius:10px; border:1px solid #f59e0b; font-size:13px; }
+@media print { .ai-chart-download { display:none; } .md-content .table-scroll { overflow:visible; } .md-content .ai-chart details { display:none; } }
+
+.tour-shade { position:fixed; z-index:100; background:rgb(2 6 23 / .65); }
+.tour-highlight { position:fixed; z-index:101; pointer-events:none; border:3px solid #a5b4fc; border-radius:12px; box-shadow:0 0 0 5px #6366f144,0 0 28px #a5b4fcaa; animation:tour-glow 1.5s ease-in-out infinite alternate; }
+.tour-next { display:inline-flex; align-items:center; justify-content:center; gap:8px; border-radius:12px; padding:10px 14px; color:white; font-weight:800; font-size:13px; background:#4f46e5; }
+@keyframes tour-glow { to { box-shadow:0 0 0 8px #6366f144,0 0 36px #a5b4fcdd; } }
+@media (prefers-reduced-motion:reduce) { .tour-highlight { animation:none; } }
