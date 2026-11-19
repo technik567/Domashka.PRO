@@ -2,8 +2,8 @@ import BackupCodes from './BackupCodes';
 import { accountAccess, parentUsername, checkNewPassword, normalizeBackupCode } from '../cloud/accountAccess';
 import GuidedTour from './GuidedTour';
 import SiteAssistant from './SiteAssistant';
-import React, { useEffect, useRef, useState } from 'react';
-import { Cloud, Download, RefreshCw, ShieldCheck, LogIn } from 'lucide-react';
+import React, { useEffect, useId, useRef, useState } from 'react';
+import { Cloud, Download, RefreshCw, ShieldCheck, LogIn, UserPlus, KeyRound } from 'lucide-react';
 import { initializeCloud } from '../cloud/runtime';
 import { getCloudClient, getCloudConfig, loginEmail, cloudError } from '../cloud/client';
 import { APP_VERSION } from '../version';
@@ -44,13 +44,25 @@ export function CloudCaptcha({ onToken, reset = 0 }) {
 
 export function CloudLogin({ recovery = false, initialError = '' }) {
   const [tourReplay, setTourReplay] = useState(0);
-  const [mode, setMode] = useState(recovery ? 'recovery' : 'login');
+  const [mode, setMode] = useState(recovery ? 'recovery' : 'register');
   const [login, setLogin] = useState(''); const [password, setPassword] = useState(''); const [confirm, setConfirm] = useState('');
   const [recoveryCode, setRecoveryCode] = useState(''); const [issued, setIssued] = useState(null);
   const [name, setName] = useState(''); const [avatar, setAvatar] = useState('🦉');
   const [root, setRoot] = useState(() => 4 + crypto.getRandomValues(new Uint8Array(1))[0] % 12); const [answer, setAnswer] = useState('');
   const [consent, setConsent] = useState(false); const [busy, setBusy] = useState(false); const [error, setError] = useState(initialError); const [notice, setNotice] = useState('');
   const [captcha, setCaptcha] = useState(''); const [reset, setReset] = useState(0);
+  const fieldId = useId(); const headingRef = useRef(null); const previousMode = useRef(mode);
+  const loginHintId = `${fieldId}-login-hint`, passwordHintId = `${fieldId}-password-hint`;
+  useEffect(() => {
+    if (previousMode.current !== mode) {
+      headingRef.current?.focus({ preventScroll: true });
+      headingRef.current?.scrollIntoView?.({ block: 'nearest' });
+    }
+    previousMode.current = mode;
+  }, [mode]);
+  const heading = mode === 'register' ? 'Регистрация' : mode === 'login' ? 'Вход' : mode === 'reset' ? 'Восстановление пароля' : 'Новый пароль';
+  const formName = mode === 'register' ? 'Регистрация родителя' : mode === 'login' ? 'Облачный вход' : mode === 'recovery' ? 'Смена пароля по ссылке' : heading;
+  const SubmitIcon = mode === 'register' ? UserPlus : mode === 'login' ? LogIn : KeyRound;
   let cfg; try { cfg = getCloudConfig(); } catch (err) { return <p role="alert" className="p-6 text-rose-700">{err.message}</p>; }
   const choose = (next) => { setMode(next); setError(''); setNotice(''); setPassword(''); setConfirm(''); setRecoveryCode(''); setCaptcha(''); setReset((n) => n + 1); };
   async function submit(event) {
@@ -89,21 +101,28 @@ export function CloudLogin({ recovery = false, initialError = '' }) {
   return <main className="min-h-screen bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex justify-center items-center p-4">
     <section className="max-w-lg w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-7 shadow-xl space-y-5">
       <header data-tour="cloud-intro" className="flex gap-3 items-center"><Cloud className="w-9 h-9 text-indigo-600 shrink-0" /><div><h1 className="text-xl font-black">Домашка.ПРО {APP_VERSION}</h1><p className="text-xs text-slate-500">Облачный кабинет · один аккаунт на компьютере и телефоне</p></div></header>
-      {mode !== 'recovery' && <div data-tour="cloud-auth-actions" className="flex flex-wrap gap-2 text-xs font-bold">{[['login','Войти'],['register','Я родитель: регистрация'],['reset','Забыли пароль?']].map(([id,label]) => <button key={id} type="button" disabled={busy} onClick={() => choose(id)} className={`rounded-xl px-3 py-2 ${mode === id ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-200' : 'bg-slate-100 dark:bg-slate-800'}`}>{label}</button>)}</div>}
-      <form data-tour="cloud-auth-form" onSubmit={submit} className="space-y-4" aria-label="Облачный вход">
-        {mode !== 'recovery' && <label className="block text-sm font-semibold">{mode === 'login' ? 'Логин родителя или полный логин ребёнка' : 'Логин родителя'}
-          <input className={field} type="text" value={login} onChange={(e) => setLogin(e.target.value)} required maxLength={mode === 'register' ? 24 : 254} autoCapitalize="none" autoCorrect="off" autoComplete="username" />
-        </label>}
+      <div>
+        <h2 ref={headingRef} tabIndex={-1} className="text-2xl font-extrabold outline-none">{heading}</h2>
+        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{mode === 'register' ? 'Создайте родительский аккаунт без почты. После регистрации сохраните все 10 резервных кодов.' : mode === 'login' ? 'Для родителей и детей, у которых уже есть аккаунт.' : 'Восстановление родительского аккаунта. Пароль ребёнка меняет родитель.'}</p>
+      </div>
+      {mode !== 'recovery' && <GuidedTour auth inlineWelcome replay={tourReplay} />}
+      <form data-tour="cloud-auth-form" onSubmit={submit} className="space-y-4" aria-label={formName}>
+        {mode !== 'recovery' && <div>
+          <label className="block text-sm font-semibold">{mode === 'login' ? 'Логин родителя или полный логин ребёнка' : 'Логин родителя'}
+            <input className={field} type="text" value={login} onChange={(e) => setLogin(e.target.value)} required minLength={mode === 'register' ? 3 : undefined} maxLength={mode === 'register' ? 24 : 254} autoCapitalize="none" autoCorrect="off" autoComplete="username" spellCheck={false} aria-describedby={loginHintId} />
+          </label>
+          <p id={loginHintId} className="mt-1.5 text-xs leading-relaxed text-slate-600 dark:text-slate-400">{mode === 'register' ? 'От 3 до 24 символов: латинские буквы A–Z, цифры 0–9, дефис (-) или подчёркивание (_). Без пробелов. Регистр букв не важен. Почта не нужна.' : mode === 'login' ? 'Родитель — свой логин. Ребёнок — полный логин, выданный родителем, включая часть после точки. Для старого email-аккаунта используйте прежний адрес.' : 'Введите логин родителя, выбранный при регистрации. Для старого email-аккаунта — прежний адрес. Детский логин здесь не подходит.'}</p>
+        </div>}
+        {mode === 'reset' && <><p className="text-sm">Введите один из 10 сохранённых кодов и новый пароль. Остальные неиспользованные коды останутся действительными.</p><label className="block text-sm font-semibold">Одноразовый резервный код<input className={`${field} font-mono`} value={recoveryCode} onChange={e => setRecoveryCode(e.target.value)} required maxLength={80} autoComplete="off" autoCapitalize="characters" spellCheck={false} /></label></>}
+        <div>
+          <label className="block text-sm font-semibold">{mode === 'login' ? 'Пароль' : 'Новый пароль'}<input className={field} type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={mode === 'login' ? undefined : 8} maxLength={128} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} aria-describedby={passwordHintId} /></label>
+          <p id={passwordHintId} className="mt-1.5 text-xs leading-relaxed text-slate-600 dark:text-slate-400">{mode === 'login' ? 'Введите действующий пароль этого аккаунта. Если забыли его, воспользуйтесь восстановлением ниже.' : 'Минимум 8 символов, не только пробелы. Максимум 72 байта UTF-8: до 72 латинских или 36 русских букв; эмодзи занимают больше места.'}</p>
+        </div>
+        {mode !== 'login' && <label className="block text-sm font-semibold">Повторите пароль<input className={field} type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required minLength={8} maxLength={128} autoComplete="new-password" /></label>}
+        {mode === 'login' && <div className="text-right"><button type="button" disabled={busy} onClick={() => choose('reset')} className="text-sm font-semibold text-indigo-600 dark:text-indigo-300 underline underline-offset-4 disabled:opacity-50">Забыли пароль?</button></div>}
         {mode === 'register' && <>
           <label className="block text-sm font-semibold">Имя родителя<input className={field} value={name} onChange={(e) => setName(e.target.value)} maxLength={60} required autoComplete="name" /></label>
           <label className="block text-sm font-semibold">Аватар<select className={field} value={avatar} onChange={(e) => setAvatar(e.target.value)}>{['🦉','🦊','🐱','🐼','🚀','🌟','🎨','🧑‍🏫'].map((icon) => <option key={icon}>{icon}</option>)}</select></label>
-        </>}
-        {mode === 'register' && <p className="text-xs text-slate-500">3–24 латинские буквы, цифры, дефис или подчёркивание. Регистр букв не важен. Почта и телефон не нужны.</p>}
-        {mode === 'reset' && <><p className="text-sm">Введите один из 10 сохранённых кодов и новый пароль. Остальные неиспользованные коды останутся действительными. Пароль ребёнка меняет родитель.</p><label className="block text-sm font-semibold">Одноразовый резервный код<input className={`${field} font-mono`} value={recoveryCode} onChange={e => setRecoveryCode(e.target.value)} required maxLength={80} autoComplete="off" autoCapitalize="characters" spellCheck={false} /></label></>}
-        {<label className="block text-sm font-semibold">{mode === 'login' ? 'Пароль' : 'Новый пароль'}<input className={field} type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} maxLength={128} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></label>}
-        {['register','reset','recovery'].includes(mode) && <label className="block text-sm font-semibold">Повторите пароль<input className={field} type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required minLength={8} maxLength={128} autoComplete="new-password" /></label>}
-        {mode !== 'login' && <p className="text-xs text-slate-500">Пароль: минимум 8 символов, максимум 72 байта UTF-8 (до 72 латинских символов).</p>}
-        {mode === 'register' && <>
           <div className="rounded-xl p-3 bg-amber-50 dark:bg-amber-950/30 text-sm space-y-2"><label className="block font-bold">Вопрос для родителя: √{root * root} = ?<input className={field} value={answer} onChange={(e) => setAnswer(e.target.value)} inputMode="numeric" required aria-label="Ответ на вопрос для родителя" /></label>
             <button type="button" onClick={() => { setRoot(4 + crypto.getRandomValues(new Uint8Array(1))[0] % 12); setAnswer(''); }} className="text-xs underline">Другой вопрос</button>
             <p className="text-xs">Это формальный шаг, не проверка возраста. Не передавайте ребёнку пароль родителя.</p></div>
@@ -112,13 +131,17 @@ export function CloudLogin({ recovery = false, initialError = '' }) {
         {['register','reset'].includes(mode) && !cfg.captchaSiteKey && <p role="status" className="text-xs text-amber-800 dark:text-amber-200">Владелец ещё не подключил антиспам Turnstile. SMTP не нужен, но открытая регистрация без защиты от ботов отключена.</p>}
         {mode !== 'recovery' && <CloudCaptcha onToken={setCaptcha} reset={reset} />}
         {error && <p role="alert" className="text-sm text-rose-600">{error}</p>}{notice && <p role="status" className="text-sm text-emerald-700 dark:text-emerald-300">{notice}</p>}
-        <button className={`${button} w-full`} disabled={busy || ['register','reset'].includes(mode) && !cfg.captchaSiteKey}><LogIn className="w-4 h-4" />{busy ? 'Выполняем…' : mode === 'login' ? 'Войти' : mode === 'register' ? 'Зарегистрироваться' : mode === 'reset' ? 'Восстановить по коду' : 'Сохранить новый пароль'}</button>
+        <button className={`${button} w-full`} disabled={busy || ['register','reset'].includes(mode) && !cfg.captchaSiteKey}><SubmitIcon className="w-4 h-4" />{busy ? 'Выполняем…' : mode === 'login' ? 'Войти' : mode === 'register' ? 'Зарегистрироваться' : mode === 'reset' ? 'Восстановить по коду' : 'Сохранить новый пароль'}</button>
       </form>
+      {mode !== 'recovery' && <div data-tour="cloud-auth-actions" className="border-t border-slate-200 dark:border-slate-800 pt-4 text-center text-sm text-slate-600 dark:text-slate-300">
+        {mode === 'login' ? <p>Нет аккаунта? <button type="button" disabled={busy} onClick={() => choose('register')} className="font-bold text-indigo-600 dark:text-indigo-300 underline underline-offset-4 disabled:opacity-50">Регистрация</button></p>
+          : <p>{mode === 'register' ? 'Уже есть аккаунт?' : 'Вспомнили пароль?'} <button type="button" disabled={busy} onClick={() => choose('login')} className="font-bold text-indigo-600 dark:text-indigo-300 underline underline-offset-4 disabled:opacity-50">Вход</button></p>}
+      </div>}
       <p className="text-xs leading-relaxed text-slate-500">Родителям и детям не нужна почта. Родитель получает 10 резервных кодов при регистрации и сам создаёт детские аккаунты. Математический вопрос не заменяет защиту аккаунта.</p>
       <details className="text-xs leading-relaxed text-slate-500"><summary className="cursor-pointer font-bold">Что хранится в облаке</summary><p className="mt-2">Профили, учебная статистика, тетрадь и отправленные фото, дневник, расписание, закладки, ошибки и семейные задания. Ключи ИИ, локальные пароли и неотправленные черновики не синхронизируются. Бесплатное облако имеет лимиты и может быть приостановлено владельцем или провайдером. Это не школьный электронный дневник.</p></details>
       <a href="./Domashka_PRO.html" download className="inline-flex gap-1 items-center text-xs font-bold text-indigo-600 dark:text-indigo-300"><Download className="w-3.5 h-3.5" />Скачать отдельную автономную версию без синхронизации</a>
     </section>
-  {mode !== 'recovery' && <><SiteAssistant allowRemote={false} page="family" onReplayTour={() => setTourReplay((n) => n+1)} /><GuidedTour auth replay={tourReplay} /></>}
+  {mode !== 'recovery' && <SiteAssistant allowRemote={false} page="family" onReplayTour={() => setTourReplay((n) => n+1)} />}
   </main>;
 }
 

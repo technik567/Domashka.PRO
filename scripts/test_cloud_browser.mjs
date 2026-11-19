@@ -114,6 +114,7 @@ async function context(options = {}) {
 async function login(state, base, name) {
   const page = await state.ctx.newPage(); await page.goto(base);
   await page.getByRole('button',{name:'Позже',exact:true}).click();
+  await page.getByRole('button',{name:'Вход',exact:true}).click();
   await page.getByLabel('Логин родителя или полный логин ребёнка').fill(name);
   await page.getByLabel('Пароль',{exact:true}).fill(password);
   await page.getByRole('form',{name:'Облачный вход'}).getByRole('button',{name:'Войти',exact:true}).click();

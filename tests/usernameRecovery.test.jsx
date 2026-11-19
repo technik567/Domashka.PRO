@@ -2,7 +2,7 @@ import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-const state=vi.hoisted(()=>({cfg:{url:'https://fixture.supabase.co',publishableKey:'sb_publishable_fixture1234567890',siteUrl:'https://site.workers.dev/',captchaSiteKey:'public-fixture-key'},client:{auth:{signInWithPassword:vi.fn(),signUp:vi.fn(),resetPasswordForEmail:vi.fn()},functions:{invoke:vi.fn()}},runtime:{backupStatus:vi.fn(),replaceBackupCodes:vi.fn()}}));
+const state=vi.hoisted(()=>({cfg:{url:'https://fixture.supabase.co',publishableKey:'sb_publishable_fixture1234567890',siteUrl:'https://site.workers.dev/',captchaSiteKey:'public-fixture-key'},client:{auth:{signInWithPassword:vi.fn(),signUp:vi.fn(),resetPasswordForEmail:vi.fn(),updateUser:vi.fn(),signOut:vi.fn()},functions:{invoke:vi.fn()}},runtime:{backupStatus:vi.fn(),replaceBackupCodes:vi.fn()}}));
 vi.mock('../src/cloud/client',async importOriginal=>({...await importOriginal(),getCloudConfig:()=>state.cfg,getCloudClient:()=>state.client}));
 vi.mock('../src/cloud/bridge',()=>({cloud:()=>state.runtime}));
 vi.mock('../src/components/GuidedTour',()=>({default:()=>null}));
@@ -18,10 +18,11 @@ beforeEach(()=>{
   cleanup();vi.clearAllMocks();localStorage.clear();sessionStorage.clear();state.cfg.captchaSiteKey='public-fixture-key';
   window.turnstile={render:vi.fn((_node,opts)=>{opts.callback('captcha-fixture');return 'widget';}),remove:vi.fn()};
   state.client.functions.invoke.mockResolvedValue({data:issued,error:null});
+  state.client.auth.updateUser.mockResolvedValue({error:null});state.client.auth.signOut.mockResolvedValue({error:null});
   state.runtime.backupStatus.mockResolvedValue({remaining:7,total:10});state.runtime.replaceBackupCodes.mockResolvedValue(issued);
 });
 async function registerForm() {
-  render(<CloudLogin />);const user=userEvent.setup();await user.click(screen.getByRole('button',{name:'Я родитель: регистрация'}));
+  render(<CloudLogin />);const user=userEvent.setup();
   await user.type(screen.getByLabelText('Логин родителя'),'Parent_One');await user.type(screen.getByLabelText('Имя родителя'),'Родитель');
   await user.type(screen.getByLabelText('Новый пароль'),'Fixture-password-123');await user.type(screen.getByLabelText('Повторите пароль'),'Fixture-password-123');
   const question=screen.getByLabelText('Ответ на вопрос для родителя');const square=Number(question.parentElement.textContent.match(/√(\d+)/)[1]);await user.type(question,String(Math.sqrt(square)));
@@ -49,6 +50,68 @@ describe('username and recovery input contracts',()=>{
     expect(redactHelpInput(`Код ${codes[1]}`)).toContain('[резервный код скрыт]');expect(redactHelpInput(codes[2].replaceAll('-',''))).not.toContain(codes[2].replaceAll('-',''));
   });
 });
+describe('registration-first cloud access',()=>{
+  it('opens the parent registration form immediately, without submitting anything',()=>{
+    render(<CloudLogin />);
+    expect(screen.getByRole('heading',{name:'Регистрация',exact:true})).toBeTruthy();
+    const form=screen.getByRole('form',{name:'Регистрация родителя'});
+    expect(within(form).getByLabelText('Логин родителя').value).toBe('');
+    expect(within(form).getByLabelText('Новый пароль').value).toBe('');
+    expect(within(form).getByLabelText('Имя родителя')).toBeTruthy();
+    expect(screen.queryByRole('form',{name:'Облачный вход'})).toBeNull();
+    expect(state.client.functions.invoke).not.toHaveBeenCalled();expect(state.client.auth.signInWithPassword).not.toHaveBeenCalled();
+  });
+  it('always shows accessible rules directly below each empty credential input',()=>{
+    render(<CloudLogin />);
+    for (const [label,rules] of [['Логин родителя',/От 3 до 24 символов/],['Новый пароль',/Минимум 8 символов/]]) {
+      const input=screen.getByLabelText(label);const hint=document.getElementById(input.getAttribute('aria-describedby'));
+      expect(input.value).toBe('');expect(hint.textContent).toMatch(rules);
+      expect(input.closest('label').nextElementSibling).toBe(hint);expect(hint.hidden).toBe(false);
+    }
+    expect(screen.getByText(/От 3 до 24 символов/).textContent).toMatch(/латинские.*цифры.*дефис.*подчёркивание.*Без пробелов/);
+    expect(screen.getByText(/Минимум 8 символов/).textContent).toMatch(/72 байта UTF-8/);
+    expect(screen.getByLabelText('Логин родителя').minLength).toBe(3);
+  });
+  it('places the existing-account Вход link below the form and clears passwords when switching either way',async()=>{
+    render(<CloudLogin />);const user=userEvent.setup();const form=screen.getByRole('form',{name:'Регистрация родителя'});
+    const enter=screen.getByRole('button',{name:'Вход',exact:true});
+    expect(enter.closest('form')).toBeNull();expect(form.compareDocumentPosition(enter)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.type(screen.getByLabelText('Логин родителя'),'parent_one');
+    await user.type(screen.getByLabelText('Новый пароль'),'Unsent-fixture-123');await user.type(screen.getByLabelText('Повторите пароль'),'Unsent-fixture-123');
+    await user.click(enter);expect(screen.getByRole('form',{name:'Облачный вход'})).toBeTruthy();
+    expect(screen.getByLabelText('Пароль',{exact:true}).value).toBe('');
+    expect(screen.getByLabelText('Логин родителя или полный логин ребёнка').value).toBe('parent_one');
+    expect(document.activeElement).toBe(screen.getByRole('heading',{name:'Вход',exact:true}));
+    await user.type(screen.getByLabelText('Пароль',{exact:true}),'Other-fixture-123');
+    await user.click(screen.getByRole('button',{name:'Регистрация',exact:true}));
+    expect(screen.getByLabelText('Новый пароль').value).toBe('');expect(screen.getByLabelText('Повторите пароль').value).toBe('');
+    expect(window.turnstile.remove).toHaveBeenCalled();expect(state.client.functions.invoke).not.toHaveBeenCalled();expect(state.client.auth.signInWithPassword).not.toHaveBeenCalled();
+  });
+  it('preserves child full-login authentication through the existing-account form',async()=>{
+    state.client.auth.signInWithPassword.mockResolvedValueOnce({error:{message:'Fixture auth refusal'}});
+    render(<CloudLogin />);const user=userEvent.setup();await user.click(screen.getByRole('button',{name:'Вход',exact:true}));
+    await user.type(screen.getByLabelText('Логин родителя или полный логин ребёнка'),'pupil.123456abcdef');
+    await user.type(screen.getByLabelText('Пароль',{exact:true}),'Fixture-password-123');await user.click(screen.getByRole('button',{name:'Войти',exact:true}));
+    expect(state.client.auth.signInWithPassword).toHaveBeenCalledWith({email:'pupil.123456abcdef@children.domashka.invalid',password:'Fixture-password-123',options:{captchaToken:'captcha-fixture'}});
+    expect(state.client.functions.invoke).not.toHaveBeenCalled();expect(screen.getByRole('alert').textContent).toBe('Fixture auth refusal');
+  });
+  it('keeps login and password rules visible after a failed registration',async()=>{
+    const user=await registerForm();state.client.functions.invoke.mockResolvedValueOnce({data:{error:'Логин уже занят'},error:null});
+    await user.click(screen.getByRole('button',{name:'Зарегистрироваться'}));
+    expect(await screen.findByText('Логин уже занят')).toBeTruthy();
+    expect(screen.getByText(/От 3 до 24 символов/)).toBeTruthy();expect(screen.getByText(/Минимум 8 символов/)).toBeTruthy();
+    expect(screen.getByRole('button',{name:'Вход',exact:true})).toBeTruthy();
+  });
+  it('keeps a legacy recovery link on password recovery, not registration, then returns to login',async()=>{
+    render(<CloudLogin recovery />);const user=userEvent.setup();
+    expect(screen.getByRole('heading',{name:'Новый пароль',exact:true})).toBeTruthy();expect(screen.queryByLabelText('Логин родителя')).toBeNull();
+    expect(screen.queryByRole('button',{name:'Зарегистрироваться'})).toBeNull();
+    await user.type(screen.getByLabelText('Новый пароль'),'New-fixture-123');await user.type(screen.getByLabelText('Повторите пароль'),'New-fixture-123');
+    await user.click(screen.getByRole('button',{name:'Сохранить новый пароль'}));
+    expect(state.client.auth.updateUser).toHaveBeenCalledWith({password:'New-fixture-123'});expect(state.client.auth.signOut).toHaveBeenCalledWith({scope:'local'});
+    expect(await screen.findByRole('form',{name:'Облачный вход'})).toBeTruthy();expect(state.client.functions.invoke).not.toHaveBeenCalled();
+  });
+});
 describe('registration displays all ten codes',()=>{
   it('registers without email, shows all ten together, and requires explicit save acknowledgement',async()=>{
     const user=await registerForm();await user.click(screen.getByRole('button',{name:'Зарегистрироваться'}));
@@ -61,10 +124,10 @@ describe('registration displays all ten codes',()=>{
     expect(screen.queryByText(codes[0])).toBeNull();expect(screen.getByLabelText('Логин родителя или полный логин ребёнка').value).toBe('parent_one');
   });
   it('does not open public registration when the site key is missing',async()=>{
-    state.cfg.captchaSiteKey='';render(<CloudLogin />);fireEvent.click(screen.getByRole('button',{name:'Я родитель: регистрация'}));expect(screen.getByRole('button',{name:'Зарегистрироваться'}).disabled).toBe(true);expect(screen.getByText(/SMTP не нужен/)).toBeTruthy();expect(state.client.functions.invoke).not.toHaveBeenCalled();
+    state.cfg.captchaSiteKey='';render(<CloudLogin />);expect(screen.getByRole('button',{name:'Зарегистрироваться'}).disabled).toBe(true);expect(screen.getByText(/SMTP не нужен/)).toBeTruthy();expect(state.client.functions.invoke).not.toHaveBeenCalled();
   });
   it('uses one code and reports the remaining nine, without generating a new set',async()=>{
-    state.client.functions.invoke.mockResolvedValueOnce({data:{ok:true,remaining:9},error:null});render(<CloudLogin />);const user=userEvent.setup();await user.click(screen.getByRole('button',{name:'Забыли пароль?'}));
+    state.client.functions.invoke.mockResolvedValueOnce({data:{ok:true,remaining:9},error:null});render(<CloudLogin />);const user=userEvent.setup();await user.click(screen.getByRole('button',{name:'Вход',exact:true}));await user.click(screen.getByRole('button',{name:'Забыли пароль?'}));
     await user.type(screen.getByLabelText('Логин родителя'),'parent_one');await user.type(screen.getByLabelText('Одноразовый резервный код'),codes[0]);await user.type(screen.getByLabelText('Новый пароль'),'New-fixture-123');await user.type(screen.getByLabelText('Повторите пароль'),'New-fixture-123');await user.click(screen.getByRole('button',{name:'Восстановить по коду'}));
     expect(await screen.findByText(/осталось кодов: 9/)).toBeTruthy();expect(state.client.functions.invoke).toHaveBeenCalledTimes(1);expect(state.client.functions.invoke.mock.calls[0][1].body).toMatchObject({action:'recover',code:codes[0].replaceAll('-','')});expect(screen.queryByRole('region',{name:'10 резервных кодов'})).toBeNull();expect(state.client.auth.resetPasswordForEmail).not.toHaveBeenCalled();
   });

@@ -35,8 +35,22 @@ try {
     unexpected.push(req.url());return route.abort('blockedbyclient');
   });
   const page=await ctx.newPage();page.setDefaultTimeout(12000);page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
-  await page.goto(base);await page.getByRole('button',{name:'Позже',exact:true}).click();
-  await page.getByRole('button',{name:'Я родитель: регистрация'}).click();
+  await page.goto(base);await page.getByRole('form',{name:'Регистрация родителя'}).waitFor();
+  ok(await page.getByRole('heading',{name:'Регистрация',exact:true}).isVisible() && calls.length===0,'first visit opens registration without an Auth mutation');
+  ok(await page.getByRole('dialog').count()===0 && await page.getByRole('complementary',{name:'Быстрый старт'}).isVisible(),'first-visit tutorial is inline and does not cover registration');
+  for (const [label,rule] of [['Логин родителя','От 3 до 24 символов'],['Новый пароль','Минимум 8 символов']]) {
+    const input=page.getByLabel(label,{exact:true});
+    const hint=await input.evaluate(el=>{const p=document.getElementById(el.getAttribute('aria-describedby'));return {text:p?.textContent,below:p?.getBoundingClientRect().top>=el.getBoundingClientRect().bottom,adjacent:el.closest('label').nextElementSibling===p,height:p?.getBoundingClientRect().height};});
+    ok(await input.inputValue()==='' && hint.text.includes(rule) && hint.below && hint.adjacent && hint.height>0,`${label}: rules are visible directly below the empty field`);
+  }
+  const enter=page.getByRole('button',{name:'Вход',exact:true});
+  ok(await enter.evaluate(el=>!el.closest('form') && Boolean(document.querySelector('form').compareDocumentPosition(el)&Node.DOCUMENT_POSITION_FOLLOWING)),'existing-account Вход is below the registration form');
+  ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'registration and hints fit a 320px viewport');
+  await page.screenshot({path:'.cache/registration-first-320.png',fullPage:true});
+  await enter.click();await page.getByRole('form',{name:'Облачный вход'}).waitFor();
+  await page.getByRole('button',{name:'Регистрация',exact:true}).click();
+  ok(await page.getByRole('form',{name:'Регистрация родителя'}).isVisible() && calls.length===0,'switching registration/login works without sending a form');
+  await page.getByRole('button',{name:'Позже',exact:true}).click();
   await page.getByLabel('Логин родителя',{exact:true}).fill('Mobile_Parent');await page.getByLabel('Имя родителя').fill('Тестовый родитель');
   await page.getByLabel('Новый пароль',{exact:true}).fill('Fixture-password-123');await page.getByLabel('Повторите пароль').fill('Fixture-password-123');
   const question=page.getByLabel('Ответ на вопрос для родителя');const square=await question.evaluate(el=>Number(el.parentElement.textContent.match(/√(\d+)/)[1]));await question.fill(String(Math.sqrt(square)));
@@ -54,6 +68,7 @@ try {
   await panel.getByRole('checkbox').check();await panel.getByRole('button',{name:/перейти ко входу/}).click();
   ok(await page.getByText(codes[0],{exact:true}).count()===0,'acknowledgement discards the one-time display');
   async function recover(code) {
+    const loginLink=page.getByRole('button',{name:'Вход',exact:true});if(await loginLink.count()) await loginLink.click();
     await page.getByRole('button',{name:'Забыли пароль?',exact:true}).click();await page.getByLabel('Логин родителя',{exact:true}).fill('mobile_parent');await page.getByLabel('Одноразовый резервный код').fill(code);
     await page.getByLabel('Новый пароль',{exact:true}).fill('New-fixture-123');await page.getByLabel('Повторите пароль').fill('New-fixture-123');await page.getByRole('button',{name:'Восстановить по коду'}).click();
   }

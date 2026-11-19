@@ -12,7 +12,7 @@ const remember = (key, value) => { try { localStorage.setItem(key,value); } catc
 export function tourSteps({ auth = false, role = 'guest', cloudMode = false, tutorOnly = false, allowAi = true } = {}) {
   if (auth) return [
     { title: 'Один адрес на всех устройствах', target: '[data-tour="cloud-intro"]', text: 'На телефоне и компьютере открывайте именно этот HTTPS-сайт. Скачанный HTML — отдельное локальное приложение, а не копия облачного аккаунта.' },
-    { title: 'Родитель регистрируется первым', target: '[data-tour="cloud-auth-actions"]', text: 'Выберите регистрацию родителя по логину и паролю, без почты. Сохраните все 10 одноразовых резервных кодов. Уже есть аккаунт — «Войти». «Забыли пароль?» использует один код. Если регистрация закрыта, антиспам должен настроить владелец сайта.' },
+    { title: 'Регистрация или вход', target: '[data-tour="cloud-auth-actions"]', text: 'Сначала открывается регистрация родителя без почты; правила логина и пароля видны под полями. Уже есть аккаунт — нажмите «Вход» под формой. На странице входа есть «Забыли пароль?» для восстановления одним из 10 кодов. Если регистрация закрыта, антиспам должен настроить владелец сайта.' },
     { title: 'У ребёнка — свой полный логин', target: '[data-tour="cloud-auth-form"]', text: 'После входа родитель создаст ученика в «Семья». Ребёнок вводит полученный полный логин с частью после точки и пароль; личная почта ему не нужна. Обучение не заполняет и не отправляет форму за вас.' },
   ];
   return [
@@ -29,7 +29,7 @@ export function tourSteps({ auth = false, role = 'guest', cloudMode = false, tut
 function visibleTarget(selector) {
   return Array.from(document.querySelectorAll(selector)).find((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }) || null;
 }
-export default function GuidedTour({ auth = false, role, cloudMode, tutorOnly, allowAi = true, replay = 0, onNavigate }) {
+export default function GuidedTour({ auth = false, role, cloudMode, tutorOnly, allowAi = true, replay = 0, onNavigate, inlineWelcome = false }) {
   const key = onboardingKey(auth);
   const [welcome, setWelcome] = useState(() => !seen(key));
   const [index, setIndex] = useState(null);
@@ -38,7 +38,10 @@ export default function GuidedTour({ auth = false, role, cloudMode, tutorOnly, a
   navigate.current = onNavigate;
   const steps = tourSteps({ auth, role, cloudMode, tutorOnly, allowAi });
   const step = index === null ? null : steps[Math.min(index, steps.length-1)];
-  const active = welcome || Boolean(step);
+  // On the public registration page, the first-visit invitation must not hide
+  // empty fields or their rules. Explicit start/replay still opens the tour.
+  const inlineIntro = inlineWelcome && welcome && replay === 0;
+  const active = !inlineIntro && (welcome || Boolean(step));
   const finish = (completed) => { remember(key, completed ? 'done' : 'skipped'); setWelcome(false); setIndex(null); setRect(null); };
   useEffect(() => { if (replay) { setWelcome(true); setIndex(null); } }, [replay]);
   useEffect(() => {
@@ -84,6 +87,13 @@ export default function GuidedTour({ auth = false, role, cloudMode, tutorOnly, a
     document.addEventListener('keydown',keydown);
     return () => { document.removeEventListener('keydown',keydown); if (restoreFocus.current?.isConnected) restoreFocus.current.focus(); };
   }, [active, key]);
+  if (inlineIntro) return <aside aria-label="Быстрый старт" className="rounded-xl border border-indigo-100 dark:border-indigo-900 bg-indigo-50/60 dark:bg-indigo-950/30 px-3 py-2 text-xs text-slate-600 dark:text-slate-300">
+    <p>Впервые здесь? Подсветим нужные кнопки, не заполняя форму за вас.</p>
+    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-semibold">
+      <button type="button" onClick={() => { setWelcome(false); setIndex(0); }} className="py-1 text-indigo-700 dark:text-indigo-300 underline underline-offset-4">Начать обучение</button>
+      <button type="button" onClick={() => finish(false)} className="py-1 underline underline-offset-4">Позже</button>
+    </div>
+  </aside>;
   if (!active) return null;
   const vw = typeof innerWidth === 'number' ? innerWidth : 360, vh = typeof innerHeight === 'number' ? innerHeight : 700;
   const cw = Math.min(370,vw-24);

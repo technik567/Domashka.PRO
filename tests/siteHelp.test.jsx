@@ -69,6 +69,18 @@ describe('local-first help and accessible per-workspace onboarding',()=>{
     expect(screen.getByText(/Шаг 1 из/)).toBeTruthy(); fireEvent.click(screen.getByRole('button',{name:'Далее'})); expect(navigate).toHaveBeenCalledWith('family');
     fireEvent.keyDown(document,{key:'Escape'}); view.rerender(<GuidedTour onNavigate={navigate} replay={1} />); expect(screen.getByRole('button',{name:'Начать обучение'})).toBeTruthy(); expect(fetch).not.toHaveBeenCalled();
   });
+  it('offers the first registration tour inline without covering the form or trapping focus',()=>{
+    render(<><input aria-label="Логин регистрации" /><GuidedTour auth inlineWelcome /></>);
+    expect(screen.getByRole('complementary',{name:'Быстрый старт'})).toBeTruthy();expect(screen.queryByRole('dialog')).toBeNull();
+    const input=screen.getByLabelText('Логин регистрации');input.focus();expect(document.activeElement).toBe(input);
+    fireEvent.click(screen.getByRole('button',{name:'Начать обучение'}));
+    expect(screen.getByRole('dialog',{name:'Интерактивное обучение'})).toBeTruthy();expect(screen.getByText(/Шаг 1 из/)).toBeTruthy();expect(fetch).not.toHaveBeenCalled();
+  });
+  it('remembers dismissal of the inline auth invitation and allows an explicit modal replay',()=>{
+    const view=render(<GuidedTour auth inlineWelcome />);fireEvent.click(screen.getByRole('button',{name:'Позже'}));view.unmount();
+    const next=render(<GuidedTour auth inlineWelcome />);expect(screen.queryByRole('complementary',{name:'Быстрый старт'})).toBeNull();expect(screen.queryByRole('dialog')).toBeNull();
+    next.rerender(<GuidedTour auth inlineWelcome replay={1} />);expect(screen.getByRole('dialog',{name:'Знакомство с Домашка.ПРО'})).toBeTruthy();expect(fetch).not.toHaveBeenCalled();
+  });
   it('has a separate login tour and skips AI steps when the parent forbids AI',()=>{
     const steps=tourSteps({role:'child',tutorOnly:true,allowAi:false}); expect(steps.some((s)=>s.target.includes('ai-tools'))).toBe(false); expect(steps.some((s)=>s.route==='cheats')).toBe(true);
     expect(tourSteps({auth:true}).every((s)=>!s.route)).toBe(true);
