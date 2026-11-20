@@ -24,6 +24,7 @@ export class PollinationsError extends Error {
       protocol: 'Pollinations вернул неподдерживаемый ответ.',
       incomplete: 'Поток Pollinations оборвался до завершения. Неполный ответ не принят.',
       empty: 'Pollinations завершил запрос без текста ответа.',
+      image: 'Этот маршрут Pollinations не принимает само фото. Выберите Vision-модель или режим OCR.',
       context: 'Задание и история превышают безопасный объём этого подключения. Сократите задание или начните новый диалог.',
     };
     super(`${messages[code] || messages.protocol}${http ? ` HTTP ${http}.` : ''}${wait ? ` Сервис просит подождать не менее ${wait} с.` : ''} Автоматического повтора и оплаты нет.`);
@@ -32,7 +33,8 @@ export class PollinationsError extends Error {
 }
 function statusError(response) {
   const status = response.status;
-  const delay = Number(response.headers?.get('retry-after'));
+  const rawDelay = response.headers?.get('retry-after') || '';
+  const delay = /^[0-9]{1,4}$/.test(rawDelay) ? Number(rawDelay) : 0;
   return new PollinationsError([401, 403].includes(status) ? 'auth' : [402, 429].includes(status) ? 'quota'
     : status >= 500 ? 'unavailable' : 'protocol', status, delay);
 }
@@ -115,8 +117,9 @@ export async function readPollinationsResponse(response, signal, onStatus) {
   }
 }
 
-export async function callPollinationsStream(systemPrompt, messages, externalSignal, _image, onStatus) {
+export async function callPollinationsStream(systemPrompt, messages, externalSignal, image, onStatus) {
   throwIfAborted(externalSignal);
+  if (image) throw new PollinationsError('image');
   const turns = (messages || []).filter(m => ['user','assistant'].includes(m?.role))
     .map(m => ({role:m.role, content:String(m.content || '')})).slice(-8);
   if (!turns.length) throw new PollinationsError('empty');
@@ -125,12 +128,14 @@ export async function callPollinationsStream(systemPrompt, messages, externalSig
   let response;
   try {
     onStatus?.({stage:'cloud', message:'Pollinations: ожидаем бесплатную очередь и ответ, до 2 минут. Можно остановить ожидание.'});
-    response = await fetchAbortable(ENDPOINT, {
-      method:'POST', credentials:'omit', referrerPolicy:'no-referrer', redirect:'error',
-      headers:{'Content-Type':'application/json', Accept:'text/event-stream'},
-      body:JSON.stringify({model:POLLINATIONS_MODEL, messages:[{role:'system',content:String(systemPrompt || '')}, ...turns],
-        stream:true, temperature:0.35}),
-    }, signal);
+    try {
+      response = await fetchAbortable(ENDPOINT, {
+        method:'POST', credentials:'omit', referrerPolicy:'no-referrer', redirect:'error',
+        headers:{'Content-Type':'application/json', Accept:'text/event-stream'},
+        body:JSON.stringify({model:POLLINATIONS_MODEL, messages:[{role:'system',content:String(systemPrompt || '')}, ...turns],
+          stream:true, temperature:0.35}),
+      }, signal);
+    } catch { throw new PollinationsError('network'); }
     if (!response.ok) throw statusError(response);
     const text = await readPollinationsResponse(response, signal, onStatus);
     return {text, used:'Pollinations · openai-fast (бесплатный потоковый маршрут)'};

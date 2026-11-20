@@ -1,4 +1,4 @@
-// Built 4.5 HTML + strict CSP + deliberately mocked AI/search transports.
+// Built 4.6 HTML + strict CSP + deliberately mocked AI/search transports.
 // No live inference, Tavily quota, physical phone or real credentials here.
 import fs from 'node:fs';
 import http from 'node:http';
@@ -33,8 +33,14 @@ try {
       requests.push({kind:plan?'plan':review?'review':'answer',body:data});
       if(scenario==='planner503') return route.fulfill({status:503,json:{error:'PRIVATE_ERROR_SENTINEL'},headers:{'access-control-allow-origin':'*'}});
       if(scenario==='network') return route.abort('failed');
+      if(scenario==='ai402') return route.fulfill({status:402,json:{error:'PRIVATE_PAYMENT_CHALLENGE'},headers:{'access-control-allow-origin':'*','retry-after':'45'}});
+      if(scenario==='partial') return route.fulfill({contentType:'text/event-stream',body:'data: {"choices":[{"delta":{"content":"НЕПОЛНЫЙ_ОТВЕТ_НЕ_ПОКАЗЫВАТЬ"}}]}\n\n',headers:{'access-control-allow-origin':'*'}});
       const content=plan?JSON.stringify(scenario==='math'?{search:false,queries:[]}:{search:true,queries:['Солнечная система число планет']}):scenario==='math'?(review?'Исправленный ответ.\n\n2+2=4':'ЧЕРНОВИК_НЕ_ПОКАЗЫВАТЬ.\n\n2+2=5'):'По выдержке: восемь планет [1]. [Неподтверждённое](https://invented.example/fake).';
-      return route.fulfill({json:{choices:[{message:{content}}]},headers:{'access-control-allow-origin':'*'}});
+      return route.fulfill({contentType:'text/event-stream',body:`data: ${JSON.stringify({choices:[{delta:{reasoning:'PRIVATE_THOUGHT_SENTINEL'}}]})}\n\ndata: ${JSON.stringify({choices:[{delta:{content},finish_reason:'stop'}]})}\n\ndata: [DONE]\n\n`,headers:{'access-control-allow-origin':'*'}});
+    }
+    if(url.hostname==='qwen-qwen3-5-omni-offline-demo.hf.space' && scenario==='qwen-failure'){
+      requests.push({kind:req.method()==='POST'?'qwen-submit':'qwen-stream'});
+      return route.fulfill(req.method()==='POST'?{json:{event_id:'fixture'},headers:{'access-control-allow-origin':'*'}}:{contentType:'text/event-stream',body:'event: error\ndata: null\n\n',headers:{'access-control-allow-origin':'*'}});
     }
     if(url.hostname==='api.tavily.com'){
       requests.push({kind:'search',body:data,keyless:req.headers()['x-tavily-access-mode']==='keyless',personalKey:req.headers().authorization===`Bearer ${key}`});
@@ -56,7 +62,7 @@ try {
   await page.getByRole('textbox',{name:'Твоё сообщение'}).fill('Черновик с фото, не отправлен');
   await page.locator('.simple-composer input[type=file]').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aG9sAAAAASUVORK5CYII=','base64')});
   await page.getByRole('img',{name:'Прикреплённое задание 1'}).waitFor();
-  await mode('advanced');await page.locator('#chat-builtin-model').selectOption('pollinations');await page.getByRole('combobox',{name:'Глубина рассуждения'}).selectOption('medium');
+  await mode('advanced');await page.locator('#chat-builtin-model').selectOption('auto');await page.getByRole('combobox',{name:'Глубина рассуждения'}).selectOption('medium');
   await page.getByRole('button',{name:'Проверить',exact:true}).click();await page.getByPlaceholder(/Вставьте сюда своё сочинение/).fill('Незаконченный черновик проверки');
   await mode('basic');await page.getByRole('heading',{name:'С чем помочь по учёбе?'}).waitFor();await mode('advanced');
   ok(await page.getByPlaceholder(/Вставьте сюда своё сочинение/).inputValue()==='Незаконченный черновик проверки','basic mode hides advanced workspaces without unmounting or losing their forms');
@@ -64,9 +70,10 @@ try {
   ok(await page.getByRole('textbox',{name:'Твоё сообщение'}).inputValue()==='Черновик с фото, не отправлен' && await page.getByRole('img',{name:'Прикреплённое задание 1'}).isVisible(),'interface switches retain unsubmitted text and processed photo without a network call');
   await page.getByRole('button',{name:'Удалить фото 1'}).click();await submit('Проверь 2+2.');
   await page.getByText('Исправленный ответ.',{exact:false}).waitFor();
-  ok(requests.map(r=>r.kind).join(',')==='plan,answer,review','model skips internet and medium reasoning makes exactly one separate review');
+  ok(requests.map(r=>r.kind).join(',')==='plan,answer,review','Auto uses only Pollinations for planner, answer and one review; no HF race or unnecessary search');
+  ok(requests.every(r=>r.body.stream===true&&r.body.model==='openai-fast') && !(await page.locator('body').innerText()).includes('PRIVATE_THOUGHT_SENTINEL'),'built HTML sends streaming requests and never displays private reasoning deltas');
   ok(!await page.getByText('ЧЕРНОВИК_НЕ_ПОКАЗЫВАТЬ.',{exact:false}).count() && !await page.locator('.work-details').evaluate(el=>el.open),'only the corrected answer is shown and completed workflow collapses');
-  await page.getByRole('textbox',{name:'Продолжить диалог'}).fill('Неотправленное уточнение');await mode('advanced');await mode('basic');
+  await page.getByRole('textbox',{name:'Продолжить диалог'}).fill('Неотправленное уточнение');await mode('advanced');await page.locator('#chat-builtin-model').selectOption('pollinations');await mode('basic');
   ok(await page.getByRole('textbox',{name:'Продолжить диалог'}).inputValue()==='Неотправленное уточнение','conversation and follow-up draft survive global interface switches');
   await page.getByRole('button',{name:'Новый чат',exact:true}).click();scenario='search';gateSearch();const before=requests.length;
   await submit('Найди источники о планетах. PRIVATE_MAIN_CONTEXT_SENTINEL');await searchEntered;
@@ -106,6 +113,18 @@ try {
   scenario='network';const networkAt=requests.length;await submit('Найди источники при обрыве связи');
   await page.getByRole('alert').filter({hasText:'Поисковик ещё не вызывался'}).waitFor();
   ok(requests.length-networkAt===1 && (await page.getByRole('alert').innerText()).includes('нельзя отличить CORS'),'opaque fetch error stays uncertain and does not start hidden fallbacks');
+  scenario='ai402';const ai402At=requests.length;await submit('Проверь пример после отказа сервиса');
+  await page.getByRole('alert').filter({hasText:'HTTP 402'}).waitFor();
+  ok(requests.length-ai402At===1 && !(await page.getByRole('alert').innerText()).includes('PRIVATE_PAYMENT_CHALLENGE') && (await page.getByRole('alert').innerText()).includes('оплаты нет'),'402 is a safe refusal with no retry, paid transition or selected-model replacement');
+  scenario='partial';const partialAt=requests.length;await submit('Проверь пример при обрыве потока');
+  await page.getByRole('alert').filter({hasText:'Неполный ответ не принят'}).waitFor();
+  ok(requests.length-partialAt===1 && !(await page.locator('body').innerText()).includes('НЕПОЛНЫЙ_ОТВЕТ_НЕ_ПОКАЗЫВАТЬ'),'partial SSE cannot become a final answer or a planner result');
+  await mode('advanced');await page.locator('#chat-builtin-model').selectOption('qwen-3.5');
+  ok(await page.getByText(/В контрольном запросе для 4.6/).count()>=1,'unverified Qwen availability is disclosed without changing the saved model');
+  await mode('basic');scenario='qwen-failure';const qwenAt=requests.length;await submit('Проверь выбранную Qwen');
+  await page.getByRole('alert').filter({hasText:'Поисковик ещё не вызывался'}).waitFor();
+  ok(requests.slice(qwenAt).map(r=>r.kind).join(',')==='qwen-submit,qwen-stream','selected Qwen failure does not invoke Pollinations, search or hidden OCR');
+  await mode('advanced');ok(await page.locator('#chat-builtin-model').inputValue()==='qwen-3.5','failed Qwen remains the explicit selection');await page.locator('#chat-builtin-model').selectOption('pollinations');await mode('basic');
   scenario='search';await settings();await page.getByRole('radio',{name:/Продвинутый/}).check();
   await page.getByLabel(/Личный ключ поиска \(необязательно\)/).fill(key);await page.getByRole('button',{name:'Подключить и проверить поиск'}).click();
   await page.getByText('Поиск ответил. Проверка тоже расходует доступную квоту.').waitFor();

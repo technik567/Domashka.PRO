@@ -11,6 +11,7 @@ export default function ModelInfoCard({ provider, model, entry, showNote = true,
   const profile = providedProfile || getModelProfile(provider, model, entry);
   return <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/70 p-3 space-y-2.5 min-w-0">
     <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-300 break-words">{profile.description}</p>
+    {profile.availabilityNote && <p className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-200">{profile.availabilityNote}</p>}
     <div className="grid gap-1.5">
       {dimensions.map((dimension, index) => {
         const score = profile.ratings[index];

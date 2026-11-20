@@ -8,6 +8,7 @@ import {fileURLToPath} from 'node:url';
 import config from '../shared/legacy-gateways.json';
 import {callQwen35Gateway,callQwen25Gateway} from '../src/standalone/legacyGateways.js';
 import {callPollinationsStream} from '../src/standalone/pollinationsGateway.js';
+import {runAnswerWorkflow} from '../src/standalone/workflow.js';
 
 const ORIGIN='https://gentle-fog-7c3b.jr-polyakoff.workers.dev';
 const HOSTS=new Set(['qwen-qwen3-5-omni-offline-demo.hf.space','developer0hye-qwen2-5-vl-7b-instruct.hf.space','text.pollinations.ai']);
@@ -49,13 +50,48 @@ export async function probeLegacyRoutes(fetchImpl=globalThis.fetch) {
   }finally{globalThis.fetch=original;}
   return report;
 }
+// Separate opt-in: the real production workflow, but a synthetic arithmetic
+// question and a fail-closed search stub. At most plan + answer + one review;
+// never calls HF, Tavily, Supabase, Auth or a payment API. NOT an E2E site test.
+export async function probePollinationsWorkflow(fetchImpl=globalThis.fetch) {
+  const report={schemaVersion:1,kind:'pollinations-workflow',scope:'Synthetic planner + answer + review using the production workflow and streaming adapter. No live search, account, photo or physical phone.',checkedAt:new Date().toISOString(),status:'not-verified',requests:[],searchAttempts:0};
+  const original=globalThis.fetch,controller=new AbortController();
+  const deadline=setTimeout(()=>controller.abort(),370000);let calls=0;
+  globalThis.fetch=async(url,init={})=>{
+    if(url!=='https://text.pollinations.ai/openai'||++calls>3)throw new Error('probe-target-or-budget');
+    const headers=new Headers(init.headers);headers.set('Origin',ORIGIN);
+    const started=Date.now(),response=await fetchImpl(url,{...init,headers});
+    const cors=response.headers?.get('access-control-allow-origin');
+    report.requests.push({stage:['plan','answer','review-1'][calls-1],status:response.status,headersElapsedMs:Date.now()-started,
+      cors:cors===ORIGIN?'match':cors==='*'?'wildcard':cors?'other':'missing',contentType:(response.headers?.get('content-type')||'').split(';')[0]});
+    return response;
+  };
+  try {
+    const output=await runAnswerWorkflow({options:{provider:'builtin',model:'pollinations',webSearch:'auto',reasoning:'medium',allowLocalFallback:false,signal:controller.signal},
+      messages:[{role:'user',content:'Сколько будет два плюс два? Это обычный учебный пример, не вопрос о текущих событиях. Ответь кратко.'}],
+      systemPrompt:'Ты учитель. Ответь по-русски кратко: одно числовое равенство и одно предложение. Это безличная проверка приложения.',
+      request:args=>callPollinationsStream(args.systemPrompt,args.messages,args.signal,undefined,args.onStatus),
+      search:async()=>{report.searchAttempts++;throw Object.assign(new Error('Probe prohibits real search.'),{code:'unexpected-search'});},contextLimit:48000});
+    const expected=output.text.length<3000&&/(?:^|\D)4(?:\D|$)/.test(output.text);
+    report.workflow={calls:output.workflow.calls,searches:output.workflow.searches,verified:output.workflow.verified,elapsedMs:output.workflow.elapsedMs};
+    report.answerLength=output.text.length;report.expectedNumberFound=expected;
+    if(expected&&output.workflow.calls===3&&output.workflow.searches===0&&output.workflow.verified===1&&report.searchAttempts===0)report.status='verified';
+  }catch(error){
+    const code=String(error.code||error.name||'failure');report.errorCode=/^[a-zA-Z0-9_-]{1,60}$/.test(code)?code:'failure';
+    report.httpStatus=Number.isInteger(error.status)?error.status:0;
+    report.stage=['plan','answer','review-1','search-1'].includes(error.stage)?error.stage:'unknown';
+  }finally{clearTimeout(deadline);controller.abort();globalThis.fetch=original;}
+  return report;
+}
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
-  if(process.argv.slice(2).join(' ')!=='--run-live'){
-    console.error('No requests made. Explicit opt-in: --run-live');process.exitCode=2;
+  const mode=process.argv.slice(2).join(' ');
+  if(!['--run-live','--run-workflow'].includes(mode)){
+    console.error('No requests made. Explicit opt-in: --run-live (4 route requests) OR --run-workflow (3 Pollinations passes, NO live search)');process.exitCode=2;
   }else{
-    const report=await probeLegacyRoutes();fs.mkdirSync('.cache',{recursive:true});
-    fs.writeFileSync('.cache/legacy-route-report.json',JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));
-    if(process.env.GITHUB_ACTIONS)console.log('::notice title=Synthetic legacy route report - NO PERSONAL DATA::'+JSON.stringify(report).replaceAll('%','%25').replaceAll('\r','%0D').replaceAll('\n','%0A'));
-    if(report.routes.some(row=>row.status!=='reply-verified'))process.exitCode=1;
+    const workflow=mode==='--run-workflow',report=await (workflow?probePollinationsWorkflow():probeLegacyRoutes());fs.mkdirSync('.cache',{recursive:true});
+    const name=workflow?'pollinations-workflow-report':'legacy-route-report';
+    fs.writeFileSync(`.cache/${name}.json`,JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));
+    if(process.env.GITHUB_ACTIONS)console.log(`::notice title=Synthetic ${name} - NO PERSONAL DATA::`+JSON.stringify(report).replaceAll('%','%25').replaceAll('\r','%0D').replaceAll('\n','%0A'));
+    if(workflow?report.status!=='verified':report.routes.some(row=>row.status!=='reply-verified'))process.exitCode=1;
   }
 }

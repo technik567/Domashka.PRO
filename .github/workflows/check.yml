@@ -16,6 +16,11 @@ on:
         required: false
         type: boolean
         default: false
+      pollinations_workflow:
+        description: 'Explicit synthetic planning/answer/review: at most 3 Pollinations streaming calls, no live search/Auth/photos/retries'
+        required: false
+        type: boolean
+        default: false
       network_metadata:
         description: 'Explicit read-only model/CORS diagnostics: GET metadata and OPTIONS, no inference, no Supabase'
         required: false
@@ -104,6 +109,27 @@ jobs:
         with:
           name: legacy-route-report
           path: .cache/legacy-route-report.json
+
+  pollinations-workflow:
+    if: github.event_name == 'workflow_dispatch' && inputs.pollinations_workflow
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Synthetic production planner and review, NO live search/Auth/retries
+        run: |
+          npx esbuild scripts/probe_legacy_routes.mjs --bundle --platform=node --format=esm --outfile=.cache/probe-legacy-routes.mjs
+          node .cache/probe-legacy-routes.mjs --run-workflow
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pollinations-workflow-report
+          path: .cache/pollinations-workflow-report.json
 
   network-metadata:
     if: github.event_name == 'workflow_dispatch' && inputs.network_metadata

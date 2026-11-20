@@ -2,9 +2,9 @@ import { QWEN_DEMO_MODELS } from './qwenDemo';
 import { PUBLIC_DEMOS } from './publicModelCatalog';
 
 export const BUILTIN_MODELS = [
-  { id: 'auto', name: 'Автовыбор · доступный бесплатный шлюз', description: 'Резервирование между прежними Qwen/Pollinations. Новые публичные демо выбираются вручную и не расходуют квоту в фоне.' },
-  { id: 'qwen-3.5', name: 'Qwen 3.5 Omni', description: 'Разбор текста и одного изображения напрямую. При ошибке шлюз не подменяется.' },
-  { id: 'pollinations', name: 'Pollinations · облачный маршрутизатор', description: 'Модель выбирает сервис Pollinations. Доступность без ключа зависит от его правил и лимитов.' },
+  { id: 'auto', name: 'Автовыбор · доступный бесплатный шлюз', description: 'Текст: сначала Pollinations, Qwen — только после отказа. Фото: только Qwen. Запросы идут по очереди; новые демо не используются в фоне.' },
+  { id: 'qwen-3.5', name: 'Qwen 3.5 Omni', description: 'Разбор текста и одного изображения напрямую. Публичное демо может отказать; выбранная модель не подменяется.' },
+  { id: 'pollinations', name: 'Pollinations · openai-fast', description: 'Текстовый маршрут GPT-OSS 20B по каталогу сервиса. Бесплатная потоковая очередь; между проходами может быть ожидание 45 секунд и дольше.' },
   { id: 'qwen-2.5-vl', name: 'Qwen 2.5 VL', description: 'Текст и одно изображение напрямую; подходит для несложных задач с фото.' },
   ...PUBLIC_DEMOS,
   ...QWEN_DEMO_MODELS,

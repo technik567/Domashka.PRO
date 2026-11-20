@@ -73,6 +73,9 @@ describe('Pollinations documented free queue, no payment or refusal retries',()=
     fetch.mockResolvedValue(stream(delta('x'.repeat(100001),'stop')));
     await expect(callPollinationsStream('Учитель',turns)).rejects.toMatchObject({code:'pollinations-protocol'});
   });
+  it('rejects a native photo instead of silently discarding it or sending it to the text endpoint',async()=>{
+    await expect(callPollinationsStream('Учитель',turns,undefined,config.neutralImageDataUrl)).rejects.toMatchObject({code:'pollinations-image'});expect(fetch).not.toHaveBeenCalled();
+  });
   it('validates context before sending and warns when the provider ends on its length limit',async()=>{
     await expect(callPollinationsStream('x'.repeat(48001),turns)).rejects.toMatchObject({code:'pollinations-context'});expect(fetch).not.toHaveBeenCalled();
     fetch.mockResolvedValue(stream(delta('Часть ответа','length')));expect((await callPollinationsStream('Учитель',turns)).text).toContain('может быть неполным');

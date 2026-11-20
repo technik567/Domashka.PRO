@@ -2,9 +2,11 @@ import { getQwenDemo } from './qwenDemo';
 import { getPublicDemo } from './publicModelCatalog';
 
 // Editorial UI profiles, NOT measured benchmarks or promises about live gateways.
+const qwenCheckNote = 'В контрольном запросе для 4.6 это демо вернуло ошибку вместо ответа. Это не проверка вашего текущего доступа. При ручном выборе перехода на другую модель нет.';
 const profiles = {
-  'builtin:qwen-3.5': { description: 'Универсальный помощник для разбора задач, объяснений и одного фото: может рассматривать схемы и рисунки, а не только извлекать текст.', ratings: [4, 3, 4] },
-  'builtin:qwen-2.5-vl': { description: 'Компактный визуальный помощник для одного снимка, формул и несложных задач. Сложные рассуждения лучше перепроверять.', ratings: [3, 4, 3] },
+  'builtin:qwen-3.5': { description: 'Универсальный помощник для разбора задач, объяснений и одного фото: может рассматривать схемы и рисунки, а не только извлекать текст.', ratings: [4, 3, 4], availabilityNote:qwenCheckNote },
+  'builtin:qwen-2.5-vl': { description: 'Компактный визуальный помощник для одного снимка, формул и несложных задач. Сложные рассуждения лучше перепроверять.', ratings: [3, 4, 3], availabilityNote:qwenCheckNote },
+  'builtin:pollinations': { description: 'Потоковый текстовый маршрут openai-fast (в каталоге сервиса — GPT-OSS 20B). Без ключа, с бесплатной очередью: между запросами может быть 45 секунд и дольше. До 2 минут на один проход. Само фото не принимает; через OCR получает только распознанный текст.', ratings:[null,null,null] },
   'gemini:gemini-2.5-flash': { description: 'Универсальный вариант с упором на быстрые объяснения и работу с изображениями.', ratings: [4, 4, 4] },
   'gemini:gemini-2.5-flash-lite': { description: 'Облегчённый вариант для коротких вопросов и простых задач; сложные условия требуют дополнительной проверки.', ratings: [3, 5, 3] },
   'gemini:gemini-2.0-flash': { description: 'Предыдущее поколение Flash для текста и фото. Перед использованием проверьте доступность этой модели у провайдера.', ratings: [3, 4, 3] },
@@ -25,14 +27,12 @@ export function getModelProfile(provider, model, entry = null) {
   if (demo) return { description: demo.description, ratings: demo.ratings, variable: false,
     sourceUrl: `https://huggingface.co/spaces/${demo.space}`, sourceName: demo.space, maxImages: demo.maxImages };
 
-  const router = (provider === 'builtin' && ['auto', 'pollinations', '', undefined].includes(model)) ||
+  const router = (provider === 'builtin' && ['auto', '', undefined].includes(model)) ||
     (provider === 'openrouter' && (!model || model === 'openrouter/free')) || (provider === 'gemini' && model === 'auto');
   if (router) return {
-    description: provider === 'builtin' && model === 'pollinations'
-      ? 'Облачный маршрутизатор для текста: внутреннюю модель выбирает Pollinations. Фото сначала распознаются отдельно. Работа без ключа зависит от правил сервиса.'
-      : provider === 'builtin'
-        ? 'Автовыбор между прежними шлюзами Qwen/Pollinations. Дополнительные демо Gemma, Llama и Mistral выбираются вручную: их общая GPU-квота не расходуется в фоне. При недоступности сети возможен явно помеченный локальный ответ.'
-        : 'Выбирает доступный вариант автоматически. Мощность, скорость и понимание меняются вместе с выбранной моделью; фиксированную оценку дать нельзя.',
+    description: provider === 'builtin'
+      ? 'Для текста сначала Pollinations с бесплатной очередью; Qwen — только при отказе. Для самого фото — Qwen. Запросы идут по очереди, общий предел 5 минут на проход. Остальные демо выбираются вручную и не расходуют квоту в фоне. Локальный резерв всегда явно помечен.'
+      : 'Выбирает доступный вариант автоматически. Мощность, скорость и понимание меняются вместе с выбранной моделью; фиксированную оценку дать нельзя.',
     ratings: [null, null, null], variable: true,
   };
   if (profiles[`${provider}:${model}`]) return { ...profiles[`${provider}:${model}`], variable: false };

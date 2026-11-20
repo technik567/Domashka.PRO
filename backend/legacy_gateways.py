@@ -7,15 +7,19 @@ import asyncio
 import json
 import re
 import uuid
+from pathlib import Path
 
 import httpx
 from . import public_demos as demos
+from .pollinations_gateway import PollinationsError, call_pollinations, POLLINATIONS_TIMEOUT
 
-QWEN_TIMEOUT = 300.0
-POLLINATIONS_TIMEOUT = 45.0
+_CONFIG = json.loads((Path(__file__).resolve().parent.parent / "shared" / "legacy-gateways.json").read_text(encoding="utf-8"))
+QWEN_TIMEOUT = _CONFIG["qwenTimeoutMs"] / 1000
+AUTO_TEXT_ROUTES = tuple(_CONFIG["autoTextRoutes"])
+AUTO_IMAGE_ROUTES = tuple(_CONFIG["autoImageRoutes"])
 HOSTS = {"qwen35": "https://qwen-qwen3-5-omni-offline-demo.hf.space",
          "qwen25": "https://developer0hye-qwen2-5-vl-7b-instruct.hf.space"}
-BLANK_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFUlEQVR4nGP8//8/AzWAiSTVIxx1AA5xAx/73812AAAAAElFTkSuQmCC"
+BLANK_PNG = _CONFIG["neutralImageDataUrl"]
 
 
 def checked_answer(text):
@@ -92,48 +96,3 @@ def call_qwen(kind, prompt, system_prompt="", history=None, image=None, timeout=
         raise error from None
     except httpx.HTTPError:
         raise demos.PublicDemoError("network") from None
-
-
-class PollinationsError(RuntimeError):
-    def __init__(self, code, status=0):
-        self.code = "pollinations-" + code
-        self.status = status if isinstance(status, int) and 400 <= status <= 599 else 0
-        messages = {"auth": "не разрешил анонимный запрос", "quota": "отказал из-за лимита или условий доступа",
-                    "unavailable": "временно недоступен", "protocol": "вернул неподдерживаемый ответ",
-                    "timeout": "не завершил ответ в отведённое время", "network": "не ответил или оборвал соединение"}
-        super().__init__(f"Pollinations: {messages[code]}." + (f" HTTP {self.status}." if self.status else "")
-                         + " Автоматического повтора и платного перехода нет.")
-
-
-async def pollinations_request(system_prompt, messages):
-    async with httpx.AsyncClient(timeout=httpx.Timeout(None, connect=15), follow_redirects=False, trust_env=False) as client:
-        async with client.stream("POST", "https://text.pollinations.ai/openai", json={"model": "openai",
-                                 "messages": [{"role": "system", "content": system_prompt}] + messages[-8:], "temperature": 0.35}) as response:
-            if not response.is_success:
-                status = response.status_code
-                raise PollinationsError("auth" if status in (401, 403) else "quota" if status in (402, 429)
-                                        else "unavailable" if status >= 500 else "protocol", status)
-            text = ""
-            async for chunk in response.aiter_text():
-                text += chunk
-                if len(text) > 100000:
-                    raise PollinationsError("protocol")
-            try:
-                data = json.loads(text)
-                answer = data["choices"][0]["message"]["content"]
-                if data.get("error") or not isinstance(answer, str) or not answer.strip():
-                    raise ValueError()
-            except (ValueError, KeyError, IndexError, TypeError):
-                raise PollinationsError("protocol") from None
-            return answer
-
-
-def call_pollinations(system_prompt, messages, timeout=POLLINATIONS_TIMEOUT):
-    async def bounded():
-        return await asyncio.wait_for(pollinations_request(system_prompt, messages), timeout=timeout)
-    try:
-        return asyncio.run(bounded())
-    except asyncio.TimeoutError:
-        raise PollinationsError("timeout") from None
-    except httpx.HTTPError:
-        raise PollinationsError("network") from None
