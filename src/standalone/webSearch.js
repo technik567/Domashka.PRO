@@ -161,7 +161,7 @@ export function searchExcerpts(data) {
   // Entities keep punctuation readable after Markdown parsing without letting
   // GFM autolink escaped URLs or interpret excerpt HTML/images/math as markup.
   const literal = value => String(value).replace(/[^\p{L}\p{N}\s]/gu, char => `&#${char.codePointAt(0)};`);
-  return '## Найденные источники\n\nМодель не завершила ответ после поиска. Ниже — **только выдержки поисковика, не готовое решение и не ответ выбранной модели**. Автоматического повтора и переключения модели не было.\n\n'
+  return '## Найденные источники\n\nМодель не завершила ответ после поиска. Ниже — **только выдержки поисковика, не готовое решение и не ответ выбранной модели**. Выдержки показаны без новой генерации; проверка ИИ не выполнена.\n\n'
     + data.results.map((row, i) => `### ${i+1}. ${literal(row.title)}\n\n${literal(row.content || 'Поисковик не передал выдержку для этого источника.')}`).join('\n\n');
 }
 const markdownLabel = (value) => value.replace(/[\\[\]`*_<>]/g, ' ');

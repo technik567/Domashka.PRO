@@ -11,6 +11,10 @@ import {runWebSearch} from '../src/standalone/webSearch.js';
 import {searchActionPrompt,parseSearchAction} from '../src/standalone/searchActions.js';
 const QUESTION='Найди официальный источник NASA о количестве планет в Солнечной системе. Используй веб-поиск, ответь одним коротким предложением со ссылкой на найденный источник.';
 const SYSTEM='Ты учитель. Это безличный тест поиска. Нужен краткий ответ по-русски, с источником только из реально полученных выдержек.';
+const mediaType=response=>{
+  const type=(response.headers.get('content-type')||'').split(';')[0].trim().toLowerCase();
+  return ['text/event-stream','application/json'].includes(type)?type:'other';
+};
 
 // One targeted response-shape inspection, not a retry loop/search acceptance.
 // Reuses the exact first public synthetic request, without cache-busting. Only
@@ -22,7 +26,7 @@ export async function inspectSearchResponse(fetchImpl=globalThis.fetch) {
     if(url!=='https://text.pollinations.ai/openai'||++calls>1)throw new Error('probe-target-or-budget');
     const headers=new Headers(init.headers);headers.set('Origin','https://gentle-fog-7c3b.jr-polyakoff.workers.dev');
     const response=await fetchImpl(url,{...init,headers});
-    report.requests.push({status:response.status,contentType:(response.headers.get('content-type')||'').split(';')[0]});return response;
+    report.requests.push({status:response.status,contentType:mediaType(response)});return response;
   };
   try {
     const output=await callPollinationsStream(SYSTEM+searchActionPrompt(1),[{role:'user',content:QUESTION}]);
@@ -55,7 +59,7 @@ export async function probeSearchWorkflow(fetchImpl=globalThis.fetch) {
       ...(model?{nativeToolsDisabled:JSON.parse(init.body).tool_choice==='none'}:{})};
     report.requests.push(record);const started=Date.now();
     const response=await fetchImpl(url,{...init,headers});
-    Object.assign(record,{status:response.status,headersReceived:true,headersElapsedMs:Date.now()-started,contentType:(response.headers.get('content-type')||'').split(';')[0]});
+    Object.assign(record,{status:response.status,headersReceived:true,headersElapsedMs:Date.now()-started,contentType:mediaType(response)});
     return response;
   };
   try{

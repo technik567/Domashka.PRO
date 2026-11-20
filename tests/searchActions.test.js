@@ -110,6 +110,22 @@ describe('reported phone models: no mandatory planner in the real browser adapte
     const output=await generateAiBrowser({provider:'builtin',model,webSearch:'auto',reasoning:'off',systemPrompt:'Учитель',messages:[{role:'user',content:'Два плюс два'}]});
     expect(submits).toBe(1);expect(output.text).toContain('2 + 2 = 4');expect(output.workflow).toMatchObject({calls:1,searches:0});expect(fetch.mock.calls.some(([url])=>url.includes('tavily')||url.includes('supabase'))).toBe(false);
   });
+  it('the real browser workflow labels post-search fallback as excerpts even during final formatting',async()=>{
+    let calls=0;const onStatus=vi.fn();
+    fetch.mockImplementation(async(url)=>{
+      if(url==='https://api.tavily.com/search')return json({results:sources('NASA planets').results});
+      if(url==='https://text.pollinations.ai/openai'){
+        if(++calls===1)return sse('data: '+JSON.stringify({choices:[{delta:{content:action(['NASA planets'])},finish_reason:'stop'}]})+'\n\n');
+        return new Response('PRIVATE_PROVIDER_ERROR',{status:503});
+      }
+      throw new Error('Unexpected endpoint');
+    });
+    const output=await generateAiBrowser({provider:'builtin',model:'pollinations',webSearch:'auto',reasoning:'high',messages:[{role:'user',content:'Найди источник'}],onStatus});
+    expect(output.sourcesOnly).toBe(true);expect(calls).toBe(2);expect(fetch).toHaveBeenCalledTimes(3);
+    expect(onStatus.mock.calls.at(-1)[0]).toMatchObject({stage:'format',message:'Получены только поисковые выдержки. Готовим их к показу…'});
+    expect(output.workflow).toMatchObject({calls:2,searches:1,verified:0});
+    expect(JSON.stringify(output)).not.toContain('PRIVATE_PROVIDER_ERROR');
+  });
   it('does not retry or silently switch a selected Gemma after an actual GPU quota refusal',async()=>{
     fetch.mockImplementation(async(url,init={})=>init.method==='POST'?json({event_id:'fixture'}):sse('event: error\ndata: "You have exceeded your GPU quota"\n\n'));
     await expect(generateAiBrowser({provider:'builtin',model:'gemma-3-12b',webSearch:'auto',reasoning:'off',messages:[{role:'user',content:'Вопрос'}]})).rejects.toMatchObject({stage:'answer-or-search',code:'quota'});

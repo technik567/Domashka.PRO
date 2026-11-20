@@ -47,6 +47,13 @@ describe('bounded opt-in search workflow regression probe',()=>{
 });
 
 
+it.each([probeSearchWorkflow,inspectSearchResponse])('does not publish arbitrary provider content-type text in reports',async probe=>{
+  const transport=vi.fn(async()=>new Response('PRIVATE_BODY',{headers:{'Content-Type':'private/SECRET_SENTINEL'}}));
+  const report=await probe(transport);
+  expect(report.requests[0].contentType).toBe('other');expect(transport).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(report)).not.toMatch(/PRIVATE_BODY|SECRET_SENTINEL/);
+});
+
 it('the separate response inspection makes only one call and reports no raw stream/error/query',async()=>{
   const original=globalThis.fetch,transport=vi.fn(async()=>new Response('data: {"error":{"message":"PRIVATE_SENTINEL rate_limit_exceeded"}}\n\n',{headers:{'Content-Type':'text/event-stream'}}));
   const report=await inspectSearchResponse(transport);expect(report).toMatchObject({kind:'pollinations-diagnostic',status:'not-verified',diagnostic:'upstream-quota'});
