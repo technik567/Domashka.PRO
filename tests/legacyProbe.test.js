@@ -9,15 +9,15 @@ function handler(url,init={}){
   if(init.method==='POST')return json({event_id:'fixture'});
   return gradio(url.includes('qwen3-5')?[null,null,null,null,[{role:'assistant',content:'4'}]]:['4']);
 }
-describe('synthetic Pollinations workflow probe never calls actual search/Auth',()=>{
-  it('runs the real planner, one answer and one review with no raw text in its report',async()=>{
+describe('synthetic Pollinations answer-or-search probe never calls actual search/Auth',()=>{
+  it('runs one initial answer and one review with no raw text in its report',async()=>{
     const original=globalThis.fetch,transport=vi.fn(async(url,init)=>{
-      const body=JSON.parse(init.body),content=body.messages[0].content.includes('Ты выбираешь, нужен ли веб-поиск')?'{"search":false,"queries":[]}':'2 + 2 = 4';
+      const content='2 + 2 = 4';
       return stream(`data: ${JSON.stringify({choices:[{delta:{content},finish_reason:'stop'}]})}\n\n`);
     });
-    const report=await probePollinationsWorkflow(transport);expect(report.status).toBe('verified');expect(report.workflow).toMatchObject({calls:3,searches:0,verified:1});
-    expect(transport).toHaveBeenCalledTimes(3);expect(transport.mock.calls.every(([url])=>url==='https://text.pollinations.ai/openai')).toBe(true);
-    expect(report.requests.map(row=>row.stage)).toEqual(['plan','answer','review-1']);expect(report.searchAttempts).toBe(0);expect(globalThis.fetch).toBe(original);
+    const report=await probePollinationsWorkflow(transport);expect(report.status).toBe('verified');expect(report.workflow).toMatchObject({calls:2,searches:0,verified:1});
+    expect(transport).toHaveBeenCalledTimes(2);expect(transport.mock.calls.every(([url])=>url==='https://text.pollinations.ai/openai')).toBe(true);
+    expect(report.requests.map(row=>row.stage)).toEqual(['answer-or-search','review-1']);expect(report.searchAttempts).toBe(0);expect(globalThis.fetch).toBe(original);
     expect(JSON.stringify(report)).not.toContain('2 + 2 = 4');
   });
   it('fails closed if the model wrongly chooses search: no actual search and no answer pass',async()=>{
@@ -26,7 +26,7 @@ describe('synthetic Pollinations workflow probe never calls actual search/Auth',
   });
   it('stops after a real refusal and restores the global transport',async()=>{
     const original=globalThis.fetch,transport=vi.fn(async()=>new Response('PRIVATE',{status:402}));
-    const report=await probePollinationsWorkflow(transport);expect(report).toMatchObject({status:'not-verified',httpStatus:402,stage:'plan'});expect(transport).toHaveBeenCalledTimes(1);expect(globalThis.fetch).toBe(original);expect(JSON.stringify(report)).not.toContain('PRIVATE');
+    const report=await probePollinationsWorkflow(transport);expect(report).toMatchObject({status:'not-verified',httpStatus:402,stage:'answer-or-search'});expect(transport).toHaveBeenCalledTimes(1);expect(globalThis.fetch).toBe(original);expect(JSON.stringify(report)).not.toContain('PRIVATE');
   });
 });
 
