@@ -1,0 +1,6 @@
+{
+  "qwenTimeoutMs": 300000,
+  "pollinationsTimeoutMs": 120000,
+  "pollinationsModel": "openai-fast",
+  "neutralImageDataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFElEQVR42mP4TyJgGNUwqmH4agAAr639H23ooMoAAAAASUVORK5CYII="
+}
