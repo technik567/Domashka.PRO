@@ -1,5 +1,5 @@
 import {describe,it,expect,vi} from 'vitest';
-import {probeSearchWorkflow} from '../scripts/probe_search_workflow.mjs';
+import {probeSearchWorkflow,inspectSearchResponse} from '../scripts/probe_search_workflow.mjs';
 const json=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
 const reply=text=>new Response(`data: ${JSON.stringify({choices:[{delta:{content:text},finish_reason:'stop'}]})}\n\n`,{headers:{'Content-Type':'text/event-stream'}});
 const action='```domashka-search\n{"search":true,"queries":["NASA solar system planets"]}\n```';
@@ -42,4 +42,11 @@ describe('bounded opt-in search workflow regression probe',()=>{
     const transport=vi.fn(async()=>reply('{"search":true,"queries":["child@example.org"]}'));const report=await probeSearchWorkflow(transport);
     expect(report).toMatchObject({status:'not-verified',stage:'answer-or-search',searchAttempts:0});expect(transport).toHaveBeenCalledTimes(1);expect(JSON.stringify(report)).not.toContain('child@example');
   });
+});
+
+
+it('the separate response inspection makes only one call and reports no raw stream/error/query',async()=>{
+  const original=globalThis.fetch,transport=vi.fn(async()=>new Response('data: {"error":{"message":"PRIVATE_SENTINEL rate_limit_exceeded"}}\n\n',{headers:{'Content-Type':'text/event-stream'}}));
+  const report=await inspectSearchResponse(transport);expect(report).toMatchObject({kind:'pollinations-diagnostic',status:'not-verified',diagnostic:'upstream-quota'});
+  expect(transport).toHaveBeenCalledTimes(1);expect(report.requests[0].status).toBe(200);expect(JSON.stringify(report)).not.toContain('PRIVATE_SENTINEL');expect(globalThis.fetch).toBe(original);
 });

@@ -31,21 +31,25 @@ try {
       const plan=data.messages[0].content.includes('ИНТЕРНЕТ ПО НЕОБХОДИМОСТИ');
       const review=data.messages[0].content.includes('ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА');
       requests.push({kind:plan?'answer-or-search':review?'review':'answer',body:data});
-      if(scenario==='initial503') return route.fulfill({status:503,json:{error:'PRIVATE_ERROR_SENTINEL'},headers:{'access-control-allow-origin':'*'}});
+      if(scenario==='initial503'||scenario==='answer503'&&!plan) return route.fulfill({status:503,json:{error:'PRIVATE_ERROR_SENTINEL'},headers:{'access-control-allow-origin':'*'}});
       if(scenario==='network') return route.abort('failed');
       if(scenario==='ai402') return route.fulfill({status:402,json:{error:'PRIVATE_PAYMENT_CHALLENGE'},headers:{'access-control-allow-origin':'*','retry-after':'45'}});
       if(scenario==='partial') return route.fulfill({contentType:'text/event-stream',body:'data: {"choices":[{"delta":{"content":"НЕПОЛНЫЙ_ОТВЕТ_НЕ_ПОКАЗЫВАТЬ"}}]}\n\n',headers:{'access-control-allow-origin':'*'}});
-      const content=plan&&scenario!=='math'?JSON.stringify({search:true,queries:['Солнечная система число планет']}):scenario==='math'?(review?'Исправленный ответ.\n\n2+2=4':'ЧЕРНОВИК_НЕ_ПОКАЗЫВАТЬ.\n\n2+2=5'):'По выдержке: восемь планет [1]. [Неподтверждённое](https://invented.example/fake).';
+      const content=scenario==='badAction'?'{"search":true,"queries":[]}':plan&&scenario!=='math'?JSON.stringify({search:true,queries:['Солнечная система число планет']}):scenario==='math'?(review?'Исправленный ответ.\n\n2+2=4':'ЧЕРНОВИК_НЕ_ПОКАЗЫВАТЬ.\n\n2+2=5'):'По выдержке: восемь планет [1]. [Неподтверждённое](https://invented.example/fake).';
       return route.fulfill({contentType:'text/event-stream',body:`data: ${JSON.stringify({choices:[{delta:{reasoning:'PRIVATE_THOUGHT_SENTINEL'}}]})}\n\ndata: ${JSON.stringify({choices:[{delta:{content},finish_reason:'stop'}]})}\n\ndata: [DONE]\n\n`,headers:{'access-control-allow-origin':'*'}});
     }
     if(url.hostname==='qwen-qwen3-5-omni-offline-demo.hf.space' && scenario==='qwen-failure'){
       requests.push({kind:req.method()==='POST'?'qwen-submit':'qwen-stream'});
       return route.fulfill(req.method()==='POST'?{json:{event_id:'fixture'},headers:{'access-control-allow-origin':'*'}}:{contentType:'text/event-stream',body:'event: error\ndata: null\n\n',headers:{'access-control-allow-origin':'*'}});
     }
+    if(url.hostname==='huggingface-projects-gemma-3-12b-it.hf.space' && scenario==='gemma-success'){
+      requests.push({kind:req.method()==='POST'?'gemma-submit':'gemma-stream'});
+      return route.fulfill(req.method()==='POST'?{json:{event_id:'fixture'},headers:{'access-control-allow-origin':'*'}}:{contentType:'text/event-stream',body:'event: complete\ndata: ["Ответ Gemma одним запросом: 2 + 2 = 4."]\n\n',headers:{'access-control-allow-origin':'*'}});
+    }
     if(url.hostname==='api.tavily.com'){
       requests.push({kind:'search',body:data,keyless:req.headers()['x-tavily-access-mode']==='keyless',personalKey:req.headers().authorization===`Bearer ${key}`});
       if(holdSearch){holdSearch=false;enteredSearch();await new Promise(resolve=>{releaseSearch=resolve;});}
-      try{return await route.fulfill(scenario==='quota'?{status:429,json:{error:'upstream-details-not-for-UI'}}:scenario==='search503'?{status:503,json:{error:'PRIVATE_ERROR_SENTINEL'}}:{json:{results:[source]},headers:{'access-control-allow-origin':'*'}});}catch{/* an explicit Stop can close the routed request */}
+      try{return await route.fulfill(scenario==='quota'?{status:429,json:{error:'upstream-details-not-for-UI'}}:scenario==='search503'?{status:503,json:{error:'PRIVATE_ERROR_SENTINEL'}}:{json:{results:[scenario==='answer503'?{...source,content:'SEARCH_EXCERPT_SENTINEL ![image](https://evil.example/leak) <img src="https://evil.example/html">'}:source]},headers:{'access-control-allow-origin':'*'}});}catch{/* an explicit Stop can close the routed request */}
       return;
     }
     unexpected.push(req.url());await route.abort('blockedbyclient');
@@ -119,12 +123,26 @@ try {
   scenario='partial';const partialAt=requests.length;await submit('Проверь пример при обрыве потока');
   await page.getByRole('alert').filter({hasText:'Неполный ответ не принят'}).waitFor();
   ok(requests.length-partialAt===1 && !(await page.locator('body').innerText()).includes('НЕПОЛНЫЙ_ОТВЕТ_НЕ_ПОКАЗЫВАТЬ'),'partial SSE cannot become a final answer or a search action');
+  scenario='badAction';const badActionAt=requests.length;await submit('Найди источник с повреждённой командой');
+  await page.getByRole('alert').filter({hasText:'Команда поиска не принята'}).waitFor();
+  ok(requests.length-badActionAt===1 && await page.locator('.simple-answer').count()===0,'malformed action is neither displayed as an answer nor sent to search or retried');
+  scenario='answer503';const sourceOnlyAt=requests.length;await submit('Найди источники, если модель откажет после поиска');
+  await page.getByText('только выдержки поисковика, не готовое решение и не ответ выбранной модели',{exact:true}).waitFor();
+  ok(requests.slice(sourceOnlyAt).map(r=>r.kind).join(',')==='answer-or-search,search,answer','post-search model refusal preserves genuine sources without a retry, model switch or review');
+  ok((await page.locator('.simple-answer').innerText()).includes('SEARCH_EXCERPT_SENTINEL') && await page.locator('.simple-answer img,.simple-answer a[href*="evil.example"]').count()===0 && await page.locator('.simple-answer a[href="https://example.org/solar-system"]').count()===1,'source-only fallback is visibly not AI work; excerpts are inert and only actual source links are active');
+  await page.screenshot({path:'.cache/workflow-mobile-sources-only.png',fullPage:true});
+  await page.getByRole('button',{name:'Новый чат',exact:true}).click();
   await mode('advanced');await page.locator('#chat-builtin-model').selectOption('qwen-3.5');
   ok(await page.getByText(/В контрольном запросе для 4.6/).count()>=1,'unverified Qwen availability is disclosed without changing the saved model');
   await mode('basic');scenario='qwen-failure';const qwenAt=requests.length;await submit('Проверь выбранную Qwen');
   await page.getByRole('alert').filter({hasText:'Поисковик ещё не вызывался'}).waitFor();
   ok(requests.slice(qwenAt).map(r=>r.kind).join(',')==='qwen-submit,qwen-stream','selected Qwen failure does not invoke Pollinations, search or hidden OCR');
-  await mode('advanced');ok(await page.locator('#chat-builtin-model').inputValue()==='qwen-3.5','failed Qwen remains the explicit selection');await page.locator('#chat-builtin-model').selectOption('pollinations');await mode('basic');
+  await mode('advanced');ok(await page.locator('#chat-builtin-model').inputValue()==='qwen-3.5','failed Qwen remains the explicit selection');
+  await page.locator('#chat-builtin-model').selectOption('gemma-3-12b');await page.getByRole('combobox',{name:'Глубина рассуждения'}).selectOption('low');await mode('basic');
+  scenario='gemma-success';const gemmaAt=requests.length;await submit('Сколько будет два плюс два?');
+  await page.getByText('Ответ Gemma одним запросом: 2 + 2 = 4.',{exact:false}).waitFor();
+  ok(requests.slice(gemmaAt).map(r=>r.kind).join(',')==='gemma-submit,gemma-stream' && (await page.locator('.simple-answer').innerText()).includes('Интернет не использовался'),'selected Gemma with Internet auto accepts a normal answer from one generation, without a mandatory JSON plan');
+  await page.getByRole('button',{name:'Новый чат',exact:true}).click();await mode('advanced');await page.locator('#chat-builtin-model').selectOption('pollinations');await mode('basic');
   scenario='search';await settings();await page.getByRole('radio',{name:/Продвинутый/}).check();
   await page.getByLabel(/Личный ключ поиска \(необязательно\)/).fill(key);await page.getByRole('button',{name:'Подключить и проверить поиск'}).click();
   await page.getByText('Поиск ответил. Проверка тоже расходует доступную квоту.').waitFor();

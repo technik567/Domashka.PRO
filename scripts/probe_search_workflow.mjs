@@ -8,6 +8,32 @@ import {fileURLToPath} from 'node:url';
 import {runAnswerWorkflow} from '../src/standalone/workflow.js';
 import {callPollinationsStream} from '../src/standalone/pollinationsGateway.js';
 import {runWebSearch} from '../src/standalone/webSearch.js';
+import {searchActionPrompt,parseSearchAction} from '../src/standalone/searchActions.js';
+const QUESTION='Найди официальный источник NASA о количестве планет в Солнечной системе. Используй веб-поиск, ответь одним коротким предложением со ссылкой на найденный источник.';
+const SYSTEM='Ты учитель. Это безличный тест поиска. Нужен краткий ответ по-русски, с источником только из реально полученных выдержек.';
+
+// One targeted response-shape inspection, not a retry loop/search acceptance.
+// Reuses the exact first public synthetic request, without cache-busting. Only
+// fixed structural diagnostic codes are reported; no raw SSE or error text.
+export async function inspectSearchResponse(fetchImpl=globalThis.fetch) {
+  const report={schemaVersion:1,kind:'pollinations-diagnostic',checkedAt:new Date().toISOString(),status:'not-verified',requests:[]};
+  const original=globalThis.fetch;let calls=0;
+  globalThis.fetch=async(url,init={})=>{
+    if(url!=='https://text.pollinations.ai/openai'||++calls>1)throw new Error('probe-target-or-budget');
+    const headers=new Headers(init.headers);headers.set('Origin','https://gentle-fog-7c3b.jr-polyakoff.workers.dev');
+    const response=await fetchImpl(url,{...init,headers});
+    report.requests.push({status:response.status,contentType:(response.headers.get('content-type')||'').split(';')[0]});return response;
+  };
+  try {
+    const output=await callPollinationsStream(SYSTEM+searchActionPrompt(1),[{role:'user',content:QUESTION}]);
+    report.answerLength=output.text.length;
+    try {report.outputKind=parseSearchAction(output.text)?'search-action':'ordinary-answer';}catch{report.outputKind='invalid-action';}
+    report.status='response-accepted';
+  }catch(error){
+    report.errorCode=error.code||'failure';report.diagnostic=error.diagnostic||'';report.httpStatus=error.status||0;
+  }finally{globalThis.fetch=original;}
+  return report;
+}
 
 export async function probeSearchWorkflow(fetchImpl=globalThis.fetch) {
   const report={schemaVersion:1,kind:'answer-or-search',checkedAt:new Date().toISOString(),status:'not-verified',
@@ -33,8 +59,7 @@ export async function probeSearchWorkflow(fetchImpl=globalThis.fetch) {
   };
   try{
     const output=await runAnswerWorkflow({options:{provider:'builtin',model:'pollinations',webSearch:'auto',reasoning:'off',allowLocalFallback:false,signal:controller.signal},
-      messages:[{role:'user',content:'Найди официальный источник NASA о количестве планет в Солнечной системе. Используй веб-поиск, ответь одним коротким предложением со ссылкой на найденный источник.'}],
-      systemPrompt:'Ты учитель. Это безличный тест поиска. Нужен краткий ответ по-русски, с источником только из реально полученных выдержек.',
+      messages:[{role:'user',content:QUESTION}],systemPrompt:SYSTEM,
       request:args=>callPollinationsStream(args.systemPrompt,args.messages,args.signal,undefined,args.onStatus),
       search:async(query,args)=>{report.searchAttempts++;const data=await runWebSearch(query,args);report.sources={count:data.results.length,hosts:data.results.map(row=>new URL(row.url).hostname)};return data;},contextLimit:48000});
     report.workflow={calls:output.workflow.calls,searches:output.workflow.searches,verified:output.workflow.verified,elapsedMs:output.workflow.elapsedMs};
@@ -54,12 +79,13 @@ export async function probeSearchWorkflow(fetchImpl=globalThis.fetch) {
   return report;
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
-  if(process.argv.slice(2).join(' ')!=='--run-live'){
-    console.error('No requests made. Explicit --run-live permits at most 2 synthetic Pollinations calls + 1 keyless Tavily search.');process.exitCode=2;
+  const mode=process.argv.slice(2).join(' ');
+  if(!['--run-live','--inspect-response'].includes(mode)){
+    console.error('No requests made. Explicit --run-live: up to 2 Pollinations + 1 keyless Tavily. Separate --inspect-response: ONE Pollinations response, no search.');process.exitCode=2;
   }else{
-    const report=await probeSearchWorkflow();fs.mkdirSync('.cache',{recursive:true});
-    fs.writeFileSync('.cache/search-workflow-report.json',JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));
+    const inspect=mode==='--inspect-response',report=await (inspect?inspectSearchResponse():probeSearchWorkflow());fs.mkdirSync('.cache',{recursive:true});
+    fs.writeFileSync(`.cache/${inspect?'pollinations-diagnostic':'search-workflow'}-report.json`,JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2));
     if(process.env.GITHUB_ACTIONS)console.log('::notice title=Synthetic search workflow - NO PERSONAL DATA::'+JSON.stringify(report).replaceAll('%','%25').replaceAll('\r','%0D').replaceAll('\n','%0A'));
-    if(report.status!=='verified')process.exitCode=1;
+    if(report.status!==(inspect?'response-accepted':'verified'))process.exitCode=1;
   }
 }

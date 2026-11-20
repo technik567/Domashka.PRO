@@ -1,7 +1,7 @@
 import {describe,it,expect,vi} from 'vitest';
 import {inflateSync} from 'node:zlib';
 import config from '../shared/legacy-gateways.json';
-import {callPollinationsStream, POLLINATIONS_MODEL, POLLINATIONS_TIMEOUT_MS} from '../src/standalone/pollinationsGateway';
+import {callPollinationsStream, PollinationsError, POLLINATIONS_MODEL, POLLINATIONS_TIMEOUT_MS} from '../src/standalone/pollinationsGateway';
 const turns=[{role:'user',content:'Сколько будет два плюс два?'}];
 const data=value=>`data: ${JSON.stringify(value)}\r\n\r\n`;
 const delta=(content,finish=null)=>data({choices:[{delta:{content},finish_reason:finish}]});
@@ -97,4 +97,24 @@ it('ships a decodable, checksummed 16x16 white RGB placeholder',()=>{
   }
   const pixels=inflateSync(Buffer.concat(compressed));expect(pixels.length).toBe(16*(1+16*3));
   for(let row=0;row<16;row++){expect(pixels[row*49]).toBe(0);expect([...pixels.subarray(row*49+1,(row+1)*49)].every(value=>value===255)).toBe(true);}expect(ended).toBe(true);
+});
+
+
+describe('fixed response-shape diagnostics, never provider bodies',()=>{
+  it.each([
+    [{error:{message:'PRIVATE_SENTINEL quota exceeded'}},'upstream-quota'],
+    [{error:{message:'PRIVATE_SENTINEL max_tokens exceeded'}},'upstream-context'],
+    [{error:{message:'PRIVATE_SENTINEL unsupported tool_calls'}},'upstream-tools'],
+    [{error:{message:'PRIVATE_SENTINEL internal failure'}},'upstream-other'],
+    [{choices:[{delta:{},finish_reason:'tool_calls'}]},'finish-tool_calls'],
+    [{choices:[{delta:{},finish_reason:'PRIVATE_SENTINEL'}]},'finish-other'],
+  ])('records only a fixed category %s',async(payload,diagnostic)=>{
+    fetch.mockResolvedValue(stream(data(payload)));
+    try {await callPollinationsStream('Учитель',turns);throw new Error('expected refusal');}
+    catch(error){expect(error).toMatchObject({code:'pollinations-protocol',diagnostic});expect(error.message+JSON.stringify(error)).not.toContain('PRIVATE_SENTINEL');}
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it('rejects caller-supplied diagnostic text outside the allowlist',()=>{
+    expect(new PollinationsError('protocol',0,0,'PRIVATE_SENTINEL').diagnostic).toBe('');
+  });
 });
