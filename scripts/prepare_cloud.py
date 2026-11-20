@@ -15,7 +15,7 @@ import zipfile
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
-PUBLIC_DOCS = ('USER_GUIDE.md','USER_GUIDE.txt','REFERENCE_COVERAGE.md','docs/CLOUD_SETUP.md','docs/CLOUD_LAUNCH.md','docs/PUBLIC_DEMOS.md','docs/QA_4.2.md','docs/QA_4.3.md','docs/QA_4.4.md', 'docs/QA_4.5.md','docs/AI_FEATURES.md','docs/AUTH_USERNAME.md')
+PUBLIC_DOCS = ('USER_GUIDE.md','USER_GUIDE.txt','REFERENCE_COVERAGE.md','docs/CLOUD_SETUP.md','docs/CLOUD_LAUNCH.md','docs/PUBLIC_DEMOS.md','docs/QA_4.2.md','docs/QA_4.3.md','docs/QA_4.4.md', 'docs/QA_4.5.md','docs/QA_4.6.md','docs/AI_FEATURES.md','docs/AUTH_USERNAME.md')
 
 
 def public_config(environ=None):
