@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
-import { api, chatStore, getStudentStats } from '../src/api';
+import { api, chatStore, getStudentStats, mistakeStore } from '../src/api';
 import { setTutorModeEnabled } from '../src/standalone/parentalControl';
 import * as aiClient from '../src/standalone/aiClient';
 import * as vision from '../src/standalone/visionEngine';
@@ -113,5 +113,41 @@ describe('API + history', () => {
     vi.spyOn(Date, 'now').mockReturnValue(12345);
     const items = await Promise.all(Array.from({ length: 20 }, () => chatStore.saveNew({ response_md: 'text' })));
     expect(new Set(items.map((item) => item.id)).size).toBe(20);
+  });
+});
+
+
+describe('search input provenance at the public API boundary',()=>{
+  const topic='Найди источники о фотосинтезе.';
+  it('passes only the typed task to local rules, not the image placeholder or OCR',async()=>{
+    const generate=vi.spyOn(aiClient,'generateAiBrowser').mockResolvedValue({text:'Ответ',used:'mock'});
+    await api.solveHomework({...request,taskText:topic,ocrText:'PRIVATE_OCR',photoMode:'ocr'});
+    expect(generate.mock.calls[0][0].searchTaskText).toBe(topic);
+    await api.solveHomework({...request,taskText:'',imagesList:['data:image/png;base64,AAAA'],photoMode:'ocr',ocrText:'Найди источники о PRIVATE_OCR'});
+    expect(generate.mock.calls[1][0].searchTaskText).toBe('');
+    expect(generate.mock.calls[1][0].messages[0].content).toContain('фото');
+  });
+  it.each([topic,''])('checker passes only the condition/topic, never the composed draft prompt: %s',async conditionText=>{
+    const generate=vi.spyOn(aiClient,'generateAiBrowser').mockResolvedValue({text:'Проверка',used:'mock'});
+    await api.checkDraft({...request,conditionText,draftText:'Найди источники о PRIVATE_DRAFT',ocrText:'PRIVATE_OCR',photoMode:'ocr'});
+    expect(generate.mock.calls[0][0].searchTaskText).toBe(conditionText);
+    expect(generate.mock.calls[0][0].messages[0].content).toContain('PRIVATE_DRAFT');
+  });
+  it.each(['question','simpler','similar_task','board_prep','explain_rules'])('follow-up %s never uses history or internal template as the search task',async action=>{
+    const generate=vi.spyOn(aiClient,'generateAiBrowser').mockResolvedValue({text:'Ответ',used:'mock'});
+    await api.chatFollowup({...request,messages:[{role:'user',content:'PRIVATE_HISTORY'}],action,question:topic});
+    expect(generate.mock.calls[0][0].searchTaskText).toBe(action==='question'?topic:'');
+  });
+  it('source-only results keep history/photos but are not counted as solved work, checks, XP or captured mistakes',async()=>{
+    const response={text:'Только выдержки, не готовое решение',used:'Tavily · только выдержки',sourcesOnly:true,photoInputUsed:'none',extractedPhotoText:'',workflow:{level:'off',calls:1,searches:1,verified:0,trail:[{stage:'sources-only',state:'warning',message:'Ответ ИИ не получен'}]}};
+    vi.spyOn(aiClient,'generateAiBrowser').mockResolvedValue(response);
+    const capture=vi.spyOn(mistakeStore,'captureFromDraftCheck');
+    const solved=await api.solveHomework({...request,imagesList:['data:image/png;base64,AAAA'],photoMode:'vision',ocrText:'STALE_OCR'});
+    expect(solved).toMatchObject({ok:true,sourcesOnly:true,photoInputUsed:'none',sympyBadge:''});
+    expect(await chatStore.get(solved.id)).toMatchObject({images_b64:['data:image/png;base64,AAAA'],photo_input_used:'none',ocr_text:'',response_md:response.text});
+    const checked=await api.checkDraft({...request,conditionText:topic,draftText:'жызнь',webSearch:'auto'});
+    expect(checked).toMatchObject({ok:true,sourcesOnly:true,mistakesAdded:0});expect(capture).not.toHaveBeenCalled();
+    expect(getStudentStats()).toMatchObject({checkedCount:0,solvedCount:0,xp:0});
+    expect(await chatStore.list()).toHaveLength(2);
   });
 });

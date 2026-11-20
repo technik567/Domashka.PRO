@@ -51,10 +51,10 @@ export async function probeLegacyRoutes(fetchImpl=globalThis.fetch) {
   return report;
 }
 // Separate opt-in: the real production workflow, but a synthetic arithmetic
-// question and a fail-closed search stub. At most answer-or-search + one review;
+// question and a fail-closed search stub. Local search skip + at most one answer and one review;
 // never calls HF, Tavily, Supabase, Auth or a payment API. NOT an E2E site test.
 export async function probePollinationsWorkflow(fetchImpl=globalThis.fetch) {
-  const report={schemaVersion:1,kind:'pollinations-workflow',scope:'Synthetic answer-or-search + review using the production workflow and streaming adapter. No live search, account, photo or physical phone.',checkedAt:new Date().toISOString(),status:'not-verified',requests:[],searchAttempts:0};
+  const report={schemaVersion:1,kind:'pollinations-workflow',scope:'Synthetic local search skip + answer + review using the production workflow and streaming adapter. No live search, account, photo or physical phone.',checkedAt:new Date().toISOString(),status:'not-verified',requests:[],searchAttempts:0};
   const original=globalThis.fetch,controller=new AbortController();
   const deadline=setTimeout(()=>controller.abort(),250000);let calls=0;
   globalThis.fetch=async(url,init={})=>{
@@ -62,7 +62,7 @@ export async function probePollinationsWorkflow(fetchImpl=globalThis.fetch) {
     const headers=new Headers(init.headers);headers.set('Origin',ORIGIN);
     const started=Date.now(),response=await fetchImpl(url,{...init,headers});
     const cors=response.headers?.get('access-control-allow-origin');
-    report.requests.push({stage:['answer-or-search','review-1'][calls-1],status:response.status,headersElapsedMs:Date.now()-started,
+    report.requests.push({stage:['answer','review-1'][calls-1],status:response.status,headersElapsedMs:Date.now()-started,
       cors:cors===ORIGIN?'match':cors==='*'?'wildcard':cors?'other':'missing',contentType:(response.headers?.get('content-type')||'').split(';')[0]});
     return response;
   };
@@ -79,7 +79,7 @@ export async function probePollinationsWorkflow(fetchImpl=globalThis.fetch) {
   }catch(error){
     const code=String(error.code||error.name||'failure');report.errorCode=/^[a-zA-Z0-9_-]{1,60}$/.test(code)?code:'failure';
     report.httpStatus=Number.isInteger(error.status)?error.status:0;
-    report.stage=['answer-or-search','answer','review-1','search-1'].includes(error.stage)?error.stage:'unknown';
+    report.stage=['search-local','answer','review-1','search-1'].includes(error.stage)?error.stage:'unknown';
   }finally{clearTimeout(deadline);controller.abort();globalThis.fetch=original;}
   return report;
 }

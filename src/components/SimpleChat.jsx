@@ -36,7 +36,7 @@ export function SimpleComposer({text,onText,onSubmit,onPaste,textareaRef,photos,
     </form>
     {(preparing||error||fileError)&&<p role={error||fileError?'alert':'status'} className="simple-error">{error||fileError||'Подготавливаем фото…'}</p>}
     {!text&&!photos.length&&!busy&&<div className="simple-suggestions">{[[Lightbulb,'Объясни тему','Объясни простыми словами, как складывать дроби с разными знаменателями.'],[PenLine,'Разбери задание','Помоги разобраться с заданием: '],[Search,'Найди источники','Найди надёжные источники о Солнечной системе.']].filter((_,i)=>!tutorOnly||i!==2).map(([Icon,title,prompt])=><button key={title} type="button" onClick={()=>{onText(prompt);textareaRef.current?.focus();}}><Icon size={17}/>{title}</button>)}</div>}
-    <p className="simple-disclaimer">{tutorOnly?'Подсказки вместо готовых ответов.':'Интернет в режиме «авто»: модель сама решит, нужны ли источники.'} Бесплатные подключения имеют лимиты.</p>
+    <p className="simple-disclaimer">{tutorOnly?'Подсказки вместо готовых ответов.':'Интернет в режиме «авто»: приложение ищет по локальным правилам до ответа модели.'} Бесплатные подключения имеют лимиты.</p>
   </div>;
 }
 

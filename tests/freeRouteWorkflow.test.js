@@ -7,7 +7,7 @@ const sse=text=>new Response(text,{headers:{'Content-Type':'text/event-stream'}}
 const completion=text=>sse(`data: ${JSON.stringify({choices:[{delta:{content:text},finish_reason:'stop'}]})}\n\n`);
 const qwenResult=(model,text)=>sse(`event: complete\ndata: ${JSON.stringify(model==='qwen35'?[null,null,null,null,[{role:'assistant',content:text}]]:[text])}\n\n`);
 
-describe('integrated free routes, answer-or-search and separate reviews',()=>{
+describe('integrated free routes, local search decisions and separate reviews',()=>{
   it('Auto starts with one streaming text request and does not spend HF quota when it succeeds',async()=>{
     fetch.mockResolvedValue(completion('2 + 2 = 4'));
     const result=await generateAiBrowser(query);
@@ -41,7 +41,7 @@ describe('integrated free routes, answer-or-search and separate reviews',()=>{
   });
   it('never replaces explicitly selected Qwen after an SSE error, including with automatic search enabled',async()=>{
     fetch.mockImplementation(async(url,init)=>init.method==='POST'?json({event_id:'fixture'}):sse('event: error\ndata: null\n\n'));
-    await expect(generateAiBrowser({...query,model:'qwen-3.5',webSearch:true})).rejects.toMatchObject({stage:'answer-or-search',code:'upstream'});
+    await expect(generateAiBrowser({...query,model:'qwen-3.5',webSearch:true})).rejects.toMatchObject({stage:'answer',code:'upstream'});
     expect(fetch).toHaveBeenCalledTimes(2);expect(fetch.mock.calls.every(([url])=>url.includes('qwen3-5-omni'))).toBe(true);
   });
   it('keeps native photos on Qwen routes, never sends them to Pollinations or silently uses OCR',async()=>{

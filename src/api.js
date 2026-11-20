@@ -234,7 +234,7 @@ export const api = {
       const {
         text: ansMd,
         used: providerUsed,
-        extractedPhotoText, photoInputUsed = 'none', workflow,
+        extractedPhotoText, photoInputUsed = 'none', workflow, sourcesOnly = false,
       } = await generateAiBrowser({
         provider,
         apiKey,
@@ -242,6 +242,7 @@ export const api = {
         customBaseUrl, customTransport, customVision,
         systemPrompt: sysPrompt, graphics: true, reasoning, webSearch,
         messages: [{ role: 'user', content: userPrompt }],
+        searchTaskText: cleanTask, // Never the photo placeholder or OCR.
         imageB64: allImgs[0] || null,
         images: allImgs,
         photoMode,
@@ -255,7 +256,7 @@ export const api = {
 
       const finalOcr = photoInputUsed === 'vision' ? '' : extractedPhotoText || cleanOcr;
       checkRequestActive(signal, locked);
-      const recheckedSympy = tutor ? '' : sympyBadge || autoVerifyMathJS(finalOcr);
+      const recheckedSympy = tutor || sourcesOnly ? '' : sympyBadge || autoVerifyMathJS(finalOcr);
 
       const convMessages = [
         {
@@ -265,7 +266,7 @@ export const api = {
         { role: 'assistant', content: ansMd },
       ];
 
-      onStatus?.({ stage: 'saving', message: 'Ответ получен. Сохраняем в вашу тетрадь…', trail:workflow?.trail, elapsedMs:workflow?.elapsedMs });
+      onStatus?.({ stage: 'saving', message: sourcesOnly ? 'Сохраняем только найденные выдержки, не ответ ИИ…' : 'Ответ получен. Сохраняем в вашу тетрадь…', trail:workflow?.trail, elapsedMs:workflow?.elapsedMs });
       const saved = await chatStore.saveNew({
         item_type: 'solve',
         tutor_only: locked,
@@ -283,6 +284,7 @@ export const api = {
         sympy_badge: recheckedSympy,
         provider_used: providerUsed,
         workflow: cleanWorkflow(workflow),
+        countActivity: !sourcesOnly,
         messages: convMessages,
       });
 
@@ -292,7 +294,7 @@ export const api = {
         chatRecord: saved,
         markdown: ansMd,
         extractedPhotoText: finalOcr,
-        photoInputUsed, workflow,
+        photoInputUsed, workflow, sourcesOnly,
         sympyBadge: recheckedSympy,
         providerUsed,
         messages: convMessages,
@@ -350,13 +352,14 @@ export const api = {
           : buildSystemPrompt(grade, examGoal, subject, tutor ? 'tutor' : mode);
 
       const nextMsgs = [...(messages || []), { role: 'user', content: promptQ }];
-      const { text: reply, used: providerUsed, photoInputUsed, workflow } = await generateAiBrowser({
+      const { text: reply, used: providerUsed, photoInputUsed, workflow, sourcesOnly = false } = await generateAiBrowser({
         provider,
         apiKey,
         model,
         customBaseUrl, customTransport, customVision,
         systemPrompt: sysPrompt, graphics: true, reasoning, webSearch,
         messages: nextMsgs,
+        searchTaskText: action === 'question' ? (question || '').trim() : '',
         // Images remain available to native Vision on every follow-up, not only the first turn.
         imageB64: original?.image_b64 && (original.photo_input_used === 'vision' || !original.ocr_text) ? original.image_b64 : null,
         images: original && (original.photo_input_used === 'vision' || !original.ocr_text) ? (original.images_b64?.length ? original.images_b64 : original.image_b64 ? [original.image_b64] : []) : [],
@@ -369,14 +372,14 @@ export const api = {
       checkRequestActive(signal, locked);
       nextMsgs.push({ role: 'assistant', content: reply });
       if (historyId) {
-        onStatus?.({ stage: 'saving', message: 'Сохраняем продолжение диалога…', trail:workflow?.trail, elapsedMs:workflow?.elapsedMs });
+        onStatus?.({ stage: 'saving', message: sourcesOnly ? 'Сохраняем только найденные выдержки, не ответ ИИ…' : 'Сохраняем продолжение диалога…', trail:workflow?.trail, elapsedMs:workflow?.elapsedMs });
         await chatStore.update(historyId, {
           messages: nextMsgs,
           workflow: cleanWorkflow(workflow), provider_used: providerUsed,
           response_md: nextMsgs[1]?.content || reply,
         });
       }
-      return { ok: true, reply, providerUsed, photoInputUsed, workflow, messages: nextMsgs };
+      return { ok: true, reply, providerUsed, photoInputUsed, workflow, sourcesOnly, messages: nextMsgs };
     } catch (e) {
       if (e?.name === 'AbortError') return { ok: false, aborted: true, error: '' };
       return { ok: false, error: e.message };
@@ -436,7 +439,7 @@ export const api = {
       const {
         text: ansMd,
         used: providerUsed,
-        extractedPhotoText, photoInputUsed = 'none', workflow,
+        extractedPhotoText, photoInputUsed = 'none', workflow, sourcesOnly = false,
       } = await generateAiBrowser({
         provider,
         apiKey,
@@ -444,6 +447,7 @@ export const api = {
         customBaseUrl, customTransport, customVision,
         systemPrompt: sysPrompt, graphics: true, reasoning, webSearch,
         messages: [{ role: 'user', content: fullUserMsg }],
+        searchTaskText: cleanCond, // Topic only; never the pupil's draft or OCR.
         imageB64: allImgs[0] || null,
         images: allImgs,
         photoMode,
@@ -480,7 +484,7 @@ export const api = {
         { role: 'assistant', content: ansMd },
       ];
 
-      onStatus?.({ stage: 'saving', message: 'Ответ получен. Сохраняем в вашу тетрадь…', trail:workflow?.trail, elapsedMs:workflow?.elapsedMs });
+      onStatus?.({ stage: 'saving', message: sourcesOnly ? 'Сохраняем только найденные выдержки, не ответ ИИ…' : 'Ответ получен. Сохраняем в вашу тетрадь…', trail:workflow?.trail, elapsedMs:workflow?.elapsedMs });
       const saved = await chatStore.saveNew({
         item_type: 'check',
         grade,
@@ -499,10 +503,11 @@ export const api = {
         response_md: ansMd,
         provider_used: providerUsed,
         workflow: cleanWorkflow(workflow),
+        countActivity: !sourcesOnly,
         messages: convMessages,
       });
 
-      const mistakesAdded = mistakeStore.captureFromDraftCheck(ansMd, finalExpress?.findings || [], {
+      const mistakesAdded = sourcesOnly ? 0 : mistakeStore.captureFromDraftCheck(ansMd, finalExpress?.findings || [], {
         checkType,
         grade,
       });
@@ -514,7 +519,7 @@ export const api = {
         markdown: ansMd,
         express: finalExpress,
         extractedPhotoText: finalOcr,
-        photoInputUsed, workflow,
+        photoInputUsed, workflow, sourcesOnly,
         mistakesAdded,
         providerUsed,
         messages: convMessages,

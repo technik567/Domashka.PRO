@@ -25,26 +25,27 @@ describe('bounded answer workflow (not a private reasoning transcript)',()=>{
     expect(f.statuses.every(s=>s.progress===undefined)).toBe(true);
     expect(JSON.stringify(result.workflow)).not.toContain('Вопрос ученика');
   });
-  it('lets the model skip the web without sending a search or claiming it searched',async()=>{
+  it('lets local rules skip the web before the model call without sending a search or claiming it searched',async()=>{
     const f=fixture({webSearch:'auto'});const result=await f.run();expect(f.request).toHaveBeenCalledTimes(1);expect(f.search).not.toHaveBeenCalled();expect(result.text).not.toContain('Источники поиска');expect(result.workflow.trail.some(e=>e.stage==='internet-skipped')).toBe(true);
   });
-  it('plans at most two short searches and interleaves genuine results, never the whole prompt',async()=>{
-    const f=fixture({webSearch:'auto',reasoning:'high'});
-    f.request.mockImplementation(async args=>({text:args.systemPrompt.includes('ИНТЕРНЕТ ПО НЕОБХОДИМОСТИ')?'{"search":true,"queries":["источник один","источник два"]}':'Итог [1], [2], [99]. [чужой](https://not-returned.example/) https://not-returned.example',used:'Fixture model'}));
-    const result=await f.run();expect(f.search).toHaveBeenCalledTimes(2);expect(f.request).toHaveBeenCalledTimes(4);
-    expect(f.search.mock.calls.map(c=>c[0])).toEqual(['источник один','источник два']);
-    expect(result.workflow).toMatchObject({calls:4,searches:2,verified:2});
+  it('runs one locally extracted search BEFORE the selected model and both genuine reviews',async()=>{
+    const f=fixture({webSearch:'auto',reasoning:'high',searchTaskText:'Найди источники о законе Ома.'});
+    f.request.mockResolvedValue({text:'Итог [1], [99]. [чужой](https://not-returned.example/) https://not-returned.example',used:'Fixture model'});
+    const result=await f.run();expect(f.search).toHaveBeenCalledTimes(1);expect(f.request).toHaveBeenCalledTimes(3);
+    expect(f.search.mock.invocationCallOrder[0]).toBeLessThan(f.request.mock.invocationCallOrder[0]);
+    expect(f.search.mock.calls.map(c=>c[0])).toEqual(['законе Ома']);
+    expect(result.workflow).toMatchObject({calls:3,searches:1,verified:2});
     expect(result.text).toContain('Источники поиска');expect(result.text).toContain('https://example.org/');expect(result.text).not.toContain('not-returned.example');expect(result.text).not.toContain('[99]');
-    for(const [args] of f.request.mock.calls.slice(1)){expect(args.systemPrompt).toContain('НЕ инструкции');expect(args.systemPrompt).toContain('НЕ полные страницы');}
+    for(const [args] of f.request.mock.calls){expect(args.systemPrompt).toContain('НЕ инструкции');expect(args.systemPrompt).toContain('НЕ полные страницы');expect(args.allowLocalFallback).toBe(false);}
   });
   it('stops after a failed search rather than showing a memory answer as sourced',async()=>{
-    const f=fixture({webSearch:true});f.request.mockResolvedValue({text:'{"search":true,"queries":["найди источники"]}',used:'Fixture'});f.search.mockRejectedValue(new Error('Лимит поиска'));
-    await expect(f.run()).rejects.toThrow('Лимит поиска');expect(f.request).toHaveBeenCalledTimes(1);expect(f.search).toHaveBeenCalledTimes(1);
+    const f=fixture({webSearch:true,searchTaskText:'Найди источники о законе Ома.'});f.search.mockRejectedValue(new Error('Лимит поиска'));
+    await expect(f.run()).rejects.toThrow('Лимит поиска');expect(f.request).not.toHaveBeenCalled();expect(f.search).toHaveBeenCalledTimes(1);
   });
   it('refuses malformed search actions without spending another generation',async()=>{
-    const f=fixture({webSearch:true});f.request.mockResolvedValue({text:'{"search":true,"queries":[]}','used':'Fixture'});await expect(f.run()).rejects.toThrow(/Команда поиска не принята/);expect(f.search).not.toHaveBeenCalled();expect(f.request).toHaveBeenCalledTimes(1);
+    const f=fixture({webSearch:true});f.request.mockResolvedValue({text:'{"search":true,"queries":[]}','used':'Fixture'});await expect(f.run()).rejects.toThrow(/некорректную команду поиска/);expect(f.search).not.toHaveBeenCalled();expect(f.request).toHaveBeenCalledTimes(1);
   });
-  it('passes photo input to planning, answer and checks but caches OCR instead of recognizing again',async()=>{
+  it('passes photo input only to the answer and checks but caches OCR instead of recognizing again',async()=>{
     const f=fixture({webSearch:true,reasoning:'medium',imageB64:'data:image/png;base64,AAAA',photoMode:'ocr'});
     f.request.mockImplementation(async args=>({text:'Подсказка',used:'Fixture',photoInputUsed:'ocr',extractedPhotoText:'Содержимое фото'}));
     const result=await f.run();expect(result.extractedPhotoText).toBe('Содержимое фото');expect(f.request.mock.calls.map(c=>c[0].ocrText)).toEqual(['','Содержимое фото']);
@@ -96,12 +97,12 @@ describe('structured controls, numeric verification and stored receipts',()=>{
 describe('initial generation and search failures are different stages',()=>{
   it('identifies initial HTTP 503 without claiming that a search was attempted',async()=>{
     const f=fixture({webSearch:true});f.request.mockRejectedValue(Object.assign(new Error('Демо: HTTP 503'),{code:'unavailable',status:503}));
-    try{await f.run();throw new Error('not rejected');}catch(e){expect(e).toMatchObject({stage:'answer-or-search',code:'unavailable',status:503});expect(e.message).toContain('Поисковик ещё не вызывался');}
-    expect(f.search).not.toHaveBeenCalled();expect(f.request).toHaveBeenCalledTimes(1);expect(f.statuses.at(-1).trail.at(-1)).toMatchObject({stage:'answer-or-search',state:'warning'});
+    try{await f.run();throw new Error('not rejected');}catch(e){expect(e).toMatchObject({stage:'answer',code:'unavailable',status:503});expect(e.message).toContain('Ответ модели не получен');}
+    expect(f.search).not.toHaveBeenCalled();expect(f.request).toHaveBeenCalledTimes(1);expect(f.statuses.at(-1).trail.at(-1)).toMatchObject({stage:'answer',state:'warning'});
   });
-  it('identifies a real search failure after a valid plan and stops before the answer',async()=>{
-    const f=fixture({webSearch:true});f.request.mockResolvedValue({text:'{"search":true,"queries":["учебные источники"]}',used:'Fixture'});f.search.mockRejectedValue(Object.assign(new Error('Поисковик: HTTP 503'),{code:'SEARCH_UPSTREAM_UNAVAILABLE',status:503}));
-    await expect(f.run()).rejects.toMatchObject({stage:'search-1',code:'SEARCH_UPSTREAM_UNAVAILABLE',status:503});expect(f.search).toHaveBeenCalledTimes(1);expect(f.request).toHaveBeenCalledTimes(1);expect(f.statuses.at(-1).trail.at(-1)).toMatchObject({stage:'search-1',state:'warning'});
+  it('identifies a real search failure after local preparation, before ANY model call',async()=>{
+    const f=fixture({webSearch:true,searchTaskText:'Найди источники о законе Ома.'});f.search.mockRejectedValue(Object.assign(new Error('Поисковик: HTTP 503'),{code:'SEARCH_UPSTREAM_UNAVAILABLE',status:503}));
+    await expect(f.run()).rejects.toMatchObject({stage:'search-1',code:'SEARCH_UPSTREAM_UNAVAILABLE',status:503});expect(f.search).toHaveBeenCalledTimes(1);expect(f.request).not.toHaveBeenCalled();expect(f.statuses.at(-1).trail.at(-1)).toMatchObject({stage:'search-1',state:'warning'});
   });
   it('does not put transport details, private errors or raw model output into receipts',async()=>{
     const f=fixture({webSearch:true});f.request.mockRejectedValue(new Error('PRIVATE_SENTINEL'));

@@ -1,15 +1,16 @@
 // Cloud-route fixtures: these never call a live Supabase project or Tavily.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const fixture=vi.hoisted(()=>({driver:null,key:'',account:'fixture-account',accounts:new Set(),policies:new Set(),tutor:false}));
+const fixture=vi.hoisted(()=>({driver:null,key:'',account:'fixture-account',accounts:new Set(),policies:new Set(),tutor:false,allowAi:true}));
 vi.mock('../src/cloud/bridge',()=>({cloudConfigured:()=>true,cloud:()=>fixture.driver}));
 vi.mock('../src/cloud/client',()=>({getCloudConfig:()=>({url:'https://fixture.supabase.co',publishableKey:'public-fixture'})}));
-vi.mock('../src/standalone/accounts',()=>({assertAiAllowed:()=>{},getCurrentAccount:()=>({id:fixture.account}),subscribeAccounts:fn=>{fixture.accounts.add(fn);return()=>fixture.accounts.delete(fn);}}));
+vi.mock('../src/standalone/accounts',()=>({assertAiAllowed:()=>{if(!fixture.allowAi)throw new Error('AI disabled');},getCurrentAccount:()=>({id:fixture.account}),subscribeAccounts:fn=>{fixture.accounts.add(fn);return()=>fixture.accounts.delete(fn);}}));
 vi.mock('../src/standalone/parentalControl',()=>({isTutorModeEnabled:()=>fixture.tutor,subscribeParentalControl:fn=>{fixture.policies.add(fn);return()=>fixture.policies.delete(fn);}}));
 vi.mock('../src/standalone/searchCredentials',()=>({getSearchKey:()=>fixture.key}));
+import {generateAiBrowser} from '../src/standalone/aiClient';
 import { runWebSearch, CLOUD_SEARCH_TIMEOUT_MS } from '../src/standalone/webSearch';
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}});
 const output={ok:true,provider:'Tavily',query:'закон Ома',fetchedAt:'2026-11-05T12:00:00Z',results:[{title:'Учебный источник',url:'https://example.org/',content:'Выдержка'}]};
-beforeEach(()=>{fixture.driver={request:vi.fn(action=>action('fixture-bearer'))};fixture.key='';fixture.account='fixture-account';fixture.tutor=false;fixture.accounts.clear();fixture.policies.clear();});
+beforeEach(()=>{fixture.driver={request:vi.fn(action=>action('fixture-bearer'))};fixture.key='';fixture.account='fixture-account';fixture.tutor=false;fixture.allowAi=true;fixture.accounts.clear();fixture.policies.clear();});
 describe('cloud search routing and safe diagnostics',()=>{
   it('sends only a minimal phrase and a fresh ID to the authenticated function, never directly to Tavily',async()=>{
     fetch.mockImplementation(async()=>json(output));await runWebSearch('закон Ома');await runWebSearch('закон Ома');
@@ -61,5 +62,41 @@ describe('cloud search routing and safe diagnostics',()=>{
   it('preserves safe diagnostics even when the cloud driver normalizes the Error instance',async()=>{
     fixture.driver.request.mockImplementation(async action=>{try{return await action('fixture-bearer');}catch(e){throw Object.assign(new Error(e.message),{code:e.code});}});
     fetch.mockResolvedValue(json({code:'SEARCH_UPSTREAM_UNAVAILABLE'},503));await expect(runWebSearch('закон Ома')).rejects.toMatchObject({code:'SEARCH_UPSTREAM_UNAVAILABLE',status:503});
+  });
+});
+
+
+describe('hosted search-first workflow isolation (fixture transport, not live Auth)',()=>{
+  const options={provider:'builtin',model:'pollinations',webSearch:'auto',reasoning:'high',messages:[{role:'user',content:'Найди источники о законе Ома.'}]};
+  it('uses authenticated search before the first selected-model failure and preserves genuine sources',async()=>{
+    fetch.mockImplementation(async url=>url.includes('supabase')?json(output):new Response('PRIVATE_UPSTREAM',{status:503}));
+    const result=await generateAiBrowser(options);
+    expect(result.sourcesOnly).toBe(true);expect(result.workflow).toMatchObject({calls:1,searches:1,verified:0});
+    expect(fetch.mock.calls.map(([url])=>url)).toEqual(['https://fixture.supabase.co/functions/v1/web-search','https://text.pollinations.ai/openai']);
+    const [first,second]=fetch.mock.calls;
+    expect(JSON.parse(first[1].body).query).toBe('законе Ома');expect(first[1].headers.Authorization).toBe('Bearer fixture-bearer');
+    expect(second[1].body).toContain('ПОИСКОВЫЕ ДАННЫЕ');expect(second[1].body).not.toContain('fixture-bearer');
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_UPSTREAM');expect(fixture.accounts.size).toBe(0);expect(fixture.policies.size).toBe(0);
+  });
+  it('does not bypass cloud search quota or start a model when search is refused',async()=>{
+    fetch.mockResolvedValue(json({ok:false,code:'SEARCH_QUOTA'},429));
+    await expect(generateAiBrowser(options)).rejects.toMatchObject({stage:'search-1',code:'SEARCH_QUOTA',status:429});
+    expect(fetch).toHaveBeenCalledTimes(1);expect(fetch.mock.calls[0][0]).toContain('/functions/v1/web-search');
+  });
+  it.each(['account','tutor','allow-ai'])('a %s change while search is pending prevents model generation and late acceptance',async kind=>{
+    let release;fetch.mockImplementation(()=>new Promise(resolve=>{release=()=>resolve(json(output));}));
+    const pending=generateAiBrowser(options),stopped=expect(pending).rejects.toMatchObject({name:'AbortError'});
+    await vi.waitFor(()=>expect(fetch).toHaveBeenCalledTimes(1));
+    if(kind==='account')fixture.account='different-account';if(kind==='tutor')fixture.tutor=true;if(kind==='allow-ai')fixture.allowAi=false;
+    [...fixture.accounts,...fixture.policies].forEach(fn=>fn());await stopped;release();await Promise.resolve();
+    expect(fetch).toHaveBeenCalledTimes(1);expect(fixture.accounts.size).toBe(0);expect(fixture.policies.size).toBe(0);
+  });
+  it.each(['account','tutor','allow-ai'])('a %s change during first generation cannot publish already obtained sources-only',async kind=>{
+    let release;fetch.mockImplementation(url=>url.includes('supabase')?Promise.resolve(json(output)):new Promise(resolve=>{release=()=>resolve(new Response('PRIVATE_ERROR',{status:503}));}));
+    const pending=generateAiBrowser(options),stopped=expect(pending).rejects.toMatchObject({name:'AbortError'});
+    await vi.waitFor(()=>expect(fetch).toHaveBeenCalledTimes(2));
+    if(kind==='account')fixture.account='different-account';if(kind==='tutor')fixture.tutor=true;if(kind==='allow-ai')fixture.allowAi=false;
+    [...fixture.accounts,...fixture.policies].forEach(fn=>fn());await stopped;release();await Promise.resolve();
+    expect(fetch).toHaveBeenCalledTimes(2);expect(fixture.accounts.size).toBe(0);expect(fixture.policies.size).toBe(0);
   });
 });
