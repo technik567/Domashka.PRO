@@ -1,5 +1,5 @@
 import { readPublicDemoJson, readPublicDemoStream, PublicDemoError, publicDemoError } from './publicDemos';
-import { linkAbortSignals, throwIfAborted, withAbort } from './network';
+import { linkAbortSignals, throwIfAborted, fetchAbortable } from './network';
 
 // Public source + /gradio_api/info inspected. This is a documented demo
 // contract, NOT a guarantee of anonymous inference/uptime. No private tokens.
@@ -49,9 +49,9 @@ export async function callQwenDemo({model:id,systemPrompt,messages,reasoning='of
     throwIfAborted(signal);
     const base=`${QWEN_DEMO_HOST}/gradio_api/call/${name}`;
     const init={signal,credentials:'omit',redirect:'error',referrerPolicy:'no-referrer'};
-    const submitted=await readPublicDemoJson(await withAbort(fetch(base,{...init,method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data,session_hash:session})}),signal),signal);
+    const submitted=await readPublicDemoJson(await fetchAbortable(base,{...init,method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({data,session_hash:session})},signal),signal);
     if(typeof submitted.event_id!=='string'||!/^[a-zA-Z0-9_-]{1,100}$/.test(submitted.event_id)) throw new PublicDemoError('protocol');
-    return readPublicDemoStream(await withAbort(fetch(`${base}/${submitted.event_id}`,init),signal),signal,onStatus,extract);
+    return readPublicDemoStream(await fetchAbortable(`${base}/${submitted.event_id}`,init,signal),signal,onStatus,extract);
   }
   try {
     // The published demo starts with thinking enabled in each fresh session.

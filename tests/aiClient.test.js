@@ -24,7 +24,7 @@ describe('model choice', () => {
   });
   it('does not silently replace a failed explicitly selected gateway', async () => {
     fetch.mockRejectedValue(new Error('Unavailable'));
-    await expect(generateAiBrowser({ ...query, model: 'pollinations' })).rejects.toThrow('недоступна');
+    await expect(generateAiBrowser({ ...query, model: 'pollinations' })).rejects.toMatchObject({ code: 'pollinations-network', stage: 'answer' });
     expect(fetch).toHaveBeenCalledTimes(1);
   });
   it('honours the exact OpenRouter model and does not retry other models', async () => {
@@ -103,7 +103,7 @@ describe('tutor policy throughout the request lifecycle', () => {
     await vi.runAllTimersAsync();
     const result = await pending;
     expect(result.ok).toBe(false);
-    expect(result.error).toContain('Облачное соединение');
+    expect(result.error).toContain('Авто не получило облачный ответ');
   });
   it('discards an in-flight response if the parental mode changes', async () => {
     let finish;
@@ -113,5 +113,17 @@ describe('tutor policy throughout the request lifecycle', () => {
     await setTutorModeEnabled(true, 'parent-password');
     finish(json({ choices: [{ message: { content: 'Готовый ответ' } }] }));
     await check;
+  });
+});
+
+describe('Python transport does not double-submit on failure',()=>{
+  it.each(['qwen-3.5','qwen-2.5-vl','auto','pollinations'])('%s stays with the selected server route after a response failure',async(model)=>{
+    window.__STANDALONE_BUILD__=false;fetch.mockResolvedValue(json({ok:false,error:'Сервер не получил ответ',code:'unavailable',upstreamStatus:503}));
+    await expect(generateAiBrowser({...query,model})).rejects.toMatchObject({code:'unavailable',status:503,stage:'answer'});
+    expect(fetch).toHaveBeenCalledTimes(1);expect(fetch.mock.calls[0][0]).toBe('/api/ai-generate');
+  });
+  it('allows a Qwen queue beyond the former 30-second browser proxy deadline',async()=>{
+    window.__STANDALONE_BUILD__=false;vi.useFakeTimers();fetch.mockImplementation(()=>new Promise(resolve=>setTimeout(()=>resolve(json({ok:true,text:'Ответ',used:'Qwen'})),35000)));
+    const p=generateAiBrowser({...query,model:'qwen-3.5'});await vi.advanceTimersByTimeAsync(35001);expect((await p).text).toBe('Ответ');expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

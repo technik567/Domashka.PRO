@@ -21,22 +21,23 @@ ERRORS = json.loads((SHARED / "public-demo-errors.json").read_text(encoding="utf
 
 
 class PublicDemoError(RuntimeError):
-    def __init__(self, code):
-        super().__init__(ERRORS.get(code, ERRORS["protocol"]))
+    def __init__(self, code, status=0):
+        self.status = status if isinstance(status, int) and 400 <= status <= 599 else 0
+        super().__init__(ERRORS.get(code, ERRORS["protocol"]) + (f" HTTP {self.status}." if self.status else ""))
         self.code = code
 
 
 def provider_error(status=0, detail=""):
     text = str(detail)[:8192]
     if status in (402, 429) or re.search(r"quota|rate.?limit|too many requests|not enough.*gpu|exceeded.*gpu", text, re.I):
-        return PublicDemoError("quota")
+        return PublicDemoError("quota", status)
     if status in (401, 403) or re.search(r"sign.?in|log.?in|unauthori[sz]ed|authentication|authenticated|access.*token", text, re.I):
-        return PublicDemoError("auth")
+        return PublicDemoError("auth", status)
     if re.search(r"input too long|context (?:window|length)|entire context|maximum.*tokens|no room to generate", text, re.I):
-        return PublicDemoError("context")
-    if status in (404, 408, 500, 502, 503, 504) or re.search(r"gpu.*(?:unavailable|busy)|space.*(?:sleep|error)|queue.*full", text, re.I):
-        return PublicDemoError("unavailable")
-    return PublicDemoError("protocol")
+        return PublicDemoError("context", status)
+    if status in (404, 408) or 500 <= status <= 599 or re.search(r"gpu.*(?:unavailable|busy)|space.*(?:sleep|error)|queue.*full", text, re.I):
+        return PublicDemoError("unavailable", status)
+    return PublicDemoError("protocol", status)
 
 
 def build_data(model, system_prompt, messages, files=None, tutor_only=False):
@@ -61,7 +62,8 @@ def build_data(model, system_prompt, messages, files=None, tutor_only=False):
 
 class DemoStream:
     """Gradio streams complete snapshots. Only `complete` is a final answer."""
-    def __init__(self):
+    def __init__(self, extract=None):
+        self.extract = extract or (lambda data: data[0] if data else None)
         self.pending = ""
         self.size = 0
         self.complete = False
@@ -90,10 +92,13 @@ class DemoStream:
             data = json.loads(raw)
         except (ValueError, TypeError):
             raise PublicDemoError("protocol") from None
-        if not isinstance(data, list) or not data or not isinstance(data[0], str):
+        if not isinstance(data, list):
             raise PublicDemoError("protocol")
         if kind == "complete":
-            self.answer, self.complete = data[0], True
+            answer = self.extract(data)
+            if not isinstance(answer, str):
+                raise PublicDemoError("protocol")
+            self.answer, self.complete = answer, True
 
     def feed(self, text, final=False):
         self.size += len(text)
@@ -133,6 +138,8 @@ async def small_body(response):
 async def expect_ok(response):
     if response.is_success:
         return
+    if response.status_code in (401, 402, 403, 404, 408, 429) or response.status_code >= 500:
+        raise provider_error(response.status_code)
     try:
         detail = await small_body(response)
     except PublicDemoError:

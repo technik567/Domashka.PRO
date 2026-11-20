@@ -74,10 +74,12 @@ describe('bounded answer workflow (not a private reasoning transcript)',()=>{
   it('cancellation interrupts even an uncooperative transport and never schedules later passes',async()=>{
     const f=fixture({reasoning:'high'});f.request.mockImplementation(()=>new Promise(()=>{}));const pending=f.run();f.controller.abort();await expect(pending).rejects.toMatchObject({name:'AbortError'});expect(f.request).toHaveBeenCalledTimes(1);
   });
-  it('an eight-minute total deadline interrupts all passes',async()=>{
-    vi.useFakeTimers();fetch.mockImplementation(()=>new Promise(()=>{}));
-    const pending=generateAiBrowser({provider:'builtin',model:'pollinations',reasoning:'high',messages:[{role:'user',content:'Проверь задачу'}]});const assertion=expect(pending).rejects.toThrow(/8 минут/);
-    await vi.advanceTimersByTimeAsync(WORKFLOW_TIMEOUT_MS+1);await assertion;expect(fetch).toHaveBeenCalledTimes(1);
+  it('an eight-minute total deadline interrupts a later pass even when each request fits its own deadline',async()=>{
+    vi.useFakeTimers();fetch.mockImplementation((url,init={})=>init.method==='POST'
+      ? Promise.resolve(new Response(JSON.stringify({event_id:'fixture-event'})))
+      : new Promise(resolve=>setTimeout(()=>resolve(new Response('event: complete\ndata: [null,null,null,null,[{"role":"assistant","content":"Ответ"}]]\n\n',{headers:{'Content-Type':'text/event-stream'}})),170000)));
+    const pending=generateAiBrowser({provider:'builtin',model:'qwen-3.5',reasoning:'high',messages:[{role:'user',content:'Проверь задачу'}]});const assertion=expect(pending).rejects.toThrow(/8 минут/);
+    await vi.advanceTimersByTimeAsync(WORKFLOW_TIMEOUT_MS+1);await assertion;expect(fetch).toHaveBeenCalledTimes(6);
   });
 });
 describe('structured controls, numeric verification and stored receipts',()=>{
@@ -89,4 +91,20 @@ describe('structured controls, numeric verification and stored receipts',()=>{
   it('auto depth is bounded and explicitly heuristic',()=>{expect(resolveReasoning('auto','Привет')).toBe('low');expect(resolveReasoning('auto','Объясни уравнение')).toBe('medium');expect(resolveReasoning('auto','Докажи теорему')).toBe('high');expect(resolveReasoning('auto','',true)).toBe('medium');expect(geminiThinkingConfig('gemini-2.5-flash','auto').thinkingConfig.thinkingBudget).toBe(512);});
   it('only returned links survive citation cleanup',()=>{const data={results:[{url:'https://example.org/'}]};const clean=constrainSearchCitations('Источник [1]. Нет [9]. [Проверка](https://fake.example/) https://example.org/',data);expect(clean).not.toContain('fake.example');expect(clean).toContain('[1](<https://example.org/>)');expect(clean).not.toContain('[9]');});
   it('stored summaries exclude raw thinking, transient queries and credentials',()=>{const value=cleanWorkflow({level:'high',calls:100,searches:9,verified:8,elapsedMs:999999,apiKey:'secret',thought:'private',trail:[{stage:'answer',message:'Готово',state:'done',query:'sensitive',raw:'private'}]});expect(value).toMatchObject({calls:4,searches:2,verified:2,elapsedMs:480000});expect(JSON.stringify(value)).not.toMatch(/private|secret|sensitive/);});
+});
+
+describe('planner and search failures are different stages',()=>{
+  it('identifies planner HTTP 503 without claiming that a search was attempted',async()=>{
+    const f=fixture({webSearch:true});f.request.mockRejectedValue(Object.assign(new Error('Демо: HTTP 503'),{code:'unavailable',status:503}));
+    try{await f.run();throw new Error('not rejected');}catch(e){expect(e).toMatchObject({stage:'plan',code:'unavailable',status:503});expect(e.message).toContain('Поисковик ещё не вызывался');}
+    expect(f.search).not.toHaveBeenCalled();expect(f.request).toHaveBeenCalledTimes(1);expect(f.statuses.at(-1).trail.at(-1)).toMatchObject({stage:'plan',state:'warning'});
+  });
+  it('identifies a real search failure after a valid plan and stops before the answer',async()=>{
+    const f=fixture({webSearch:true});f.request.mockResolvedValue({text:'{"search":true,"queries":["учебные источники"]}',used:'Fixture'});f.search.mockRejectedValue(Object.assign(new Error('Поисковик: HTTP 503'),{code:'SEARCH_UPSTREAM_UNAVAILABLE',status:503}));
+    await expect(f.run()).rejects.toMatchObject({stage:'search-1',code:'SEARCH_UPSTREAM_UNAVAILABLE',status:503});expect(f.search).toHaveBeenCalledTimes(1);expect(f.request).toHaveBeenCalledTimes(1);expect(f.statuses.at(-1).trail.at(-1)).toMatchObject({stage:'search-1',state:'warning'});
+  });
+  it('does not put transport details, private errors or raw model output into receipts',async()=>{
+    const f=fixture({webSearch:true});f.request.mockRejectedValue(new Error('PRIVATE_SENTINEL'));
+    await expect(f.run()).rejects.toThrow();expect(JSON.stringify(f.statuses)).not.toContain('PRIVATE_SENTINEL');expect(f.search).not.toHaveBeenCalled();
+  });
 });

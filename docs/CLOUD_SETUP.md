@@ -1,4 +1,4 @@
-# Облачная Домашка.ПРО 4.4: настройка владельцем
+# Облачная Домашка.ПРО 4.5: настройка владельцем
 
 **Состояние исходников не равно работающему сервису.** В этой поставке есть миграции, браузерный клиент, серверная функция и проверки. Проект Supabase, Turnstile и публикация Cloudflare должны быть настроены владельцем. Успех локальных тестов не подтверждает работу GoTrue/Storage или синхронизацию реальных устройств.
 
@@ -150,10 +150,10 @@ SQL-прогон исполняет настоящие миграции на Pos
 - https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits
 - Точная формулировка про чувствительные операции: https://github.com/github/docs/blob/main/data/reusables/pages/no_sensitive_data_pages.md
 
-## Дополнения 4.3 / 4.4
+## Дополнения 4.3 / 4.4 / 4.5
 
 Новые проекты применяют все восемь SQL-файлов в порядке имён. В уже подготовленном проекте миграции повторно не выполняют: проверяйте историю. Поиск использует отдельную `web-search` функцию и ту же точную `DOMASHKA_ALLOWED_ORIGINS`. В исходнике 4.4 официальный keyless работает без ключа; серверный owner-only `TAVILY_API_KEY` и личный ключ только в памяти вкладки необязательны. Для уже существующего проекта нужна новая версия функции, **не повторение SQL**: [контракт и квоты](AI_FEATURES.md#поиск-tavily).
 
 Для первого Direct Upload можно собрать с `DOMASHKA_SITE_URL=auto` и `python3 scripts/prepare_cloud.py --zip Domashka_PRO_Cloudflare.zip`. Origin определяется из реального HTTPS-адреса, не из HTML-файла. Auth redirects/Origins/CAPTCHA это не настраивает: после deployment задайте точный адрес сервера. Этот раздел описывает **новый проект**, не повторную установку существующего.
 
-**Существующий Worker `gentle-fog-7c3b` не пересоздавать.** После 4.4 владелец сообщил о подключении GitHub; для этого конкретного сайта подготовлены `wrangler.json`, `cloudflare.public.json` с уже используемыми публичными значениями, `build:worker` → `.cache/worker-site` и `deploy:worker` с проверкой `main`. Панель: build `npm ci && npm run build:worker`, deploy `npm run deploy:worker`, production branch `main`, Preview Builds выключены. Это не перенос/сброс Supabase и не команда для произвольного другого проекта. Успешное развёртывание ещё нужно подтвердить после отдельного одобренного merge. [Полная инструкция и актуальный статус](CLOUD_LAUNCH.md).
+**Существующий Worker `gentle-fog-7c3b` не пересоздавать.** После 4.4 владелец сообщил о подключении GitHub; для этого конкретного сайта подготовлены `wrangler.json`, `cloudflare.public.json` с уже используемыми публичными значениями, `build:worker` → `.cache/worker-site` и `deploy:worker` с проверкой `main`. Панель: build `npm ci && npm run build:worker`, deploy `npm run deploy:worker`, production branch `main`, Preview Builds выключены. Это не перенос/сброс Supabase и не команда для произвольного другого проекта. PR №9 уже одобренно объединён, его main Cloudflare build успешен. Исправление 4.5 ещё требует нового разрешения на merge и отдельного обновления web-search; SQL и данные не повторять. [Полная инструкция и актуальный статус](CLOUD_LAUNCH.md).

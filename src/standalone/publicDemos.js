@@ -1,20 +1,24 @@
 import { getPublicDemo, PUBLIC_DEMO_TIMEOUT_MS, PUBLIC_DEMO_LIMITS } from './publicModelCatalog';
 import messages from '../../shared/public-demo-errors.json';
-import { linkAbortSignals, throwIfAborted } from './network';
+import { linkAbortSignals, throwIfAborted, withAbort as abortable, fetchAbortable } from './network';
 
 export class PublicDemoError extends Error {
-  constructor(code) { super(messages[code] || messages.protocol); this.name = 'PublicDemoError'; this.code = code; }
+  constructor(code, status = 0) {
+    const http = Number.isInteger(status) && status >= 400 && status <= 599 ? status : 0;
+    super((messages[code] || messages.protocol) + (http ? ` HTTP ${http}.` : ''));
+    this.name = 'PublicDemoError'; this.code = code; this.status = http;
+  }
 }
 
 // Never put a provider body (potentially containing a prompt, path, or secret)
 // into the UI. Only classify known errors, including errors inside HTTP 200 SSE.
 export function publicDemoError(status = 0, detail = '') {
   const text = String(detail).slice(0, 8192);
-  if ([402, 429].includes(status) || /quota|rate.?limit|too many requests|not enough.*gpu|exceeded.*gpu/i.test(text)) return new PublicDemoError('quota');
-  if ([401, 403].includes(status) || /sign.?in|log.?in|unauthori[sz]ed|authentication|authenticated|access.*token/i.test(text)) return new PublicDemoError('auth');
-  if (/input too long|context (?:window|length)|entire context|maximum.*tokens|no room to generate/i.test(text)) return new PublicDemoError('context');
-  if ([404, 408, 500, 502, 503, 504].includes(status) || /gpu.*(?:unavailable|busy)|space.*(?:sleep|error)|queue.*full/i.test(text)) return new PublicDemoError('unavailable');
-  return new PublicDemoError('protocol');
+  if ([402, 429].includes(status) || /quota|rate.?limit|too many requests|not enough.*gpu|exceeded.*gpu/i.test(text)) return new PublicDemoError('quota', status);
+  if ([401, 403].includes(status) || /sign.?in|log.?in|unauthori[sz]ed|authentication|authenticated|access.*token/i.test(text)) return new PublicDemoError('auth', status);
+  if (/input too long|context (?:window|length)|entire context|maximum.*tokens|no room to generate/i.test(text)) return new PublicDemoError('context', status);
+  if ([404, 408].includes(status) || status >= 500 && status <= 599 || /gpu.*(?:unavailable|busy)|space.*(?:sleep|error)|queue.*full/i.test(text)) return new PublicDemoError('unavailable', status);
+  return new PublicDemoError('protocol', status);
 }
 
 // The Gradio ChatInterface API does not expose its history state. Give every
@@ -39,18 +43,6 @@ function abortReason(signal) {
   return signal.reason || new DOMException('Запрос остановлен.', 'AbortError');
 }
 
-function abortable(promise, signal) {
-  if (signal.aborted) return Promise.reject(abortReason(signal));
-  return new Promise((resolve, reject) => {
-    const abort = () => { signal.removeEventListener('abort', abort); reject(abortReason(signal)); };
-    signal.addEventListener('abort', abort, { once: true });
-    Promise.resolve(promise).then((value) => {
-      signal.removeEventListener('abort', abort);
-      if (signal.aborted) reject(abortReason(signal)); else resolve(value);
-    }, (error) => { signal.removeEventListener('abort', abort); reject(error); });
-  });
-}
-
 function closeReader(reader) {
   // Do not let a broken WebView's cancellation promise defeat the deadline.
   try { Promise.resolve(reader?.cancel()).catch(() => {}); } catch { /* closed */ }
@@ -58,7 +50,7 @@ function closeReader(reader) {
 
 async function consumeBody(response, signal, limit, onChunk) {
   const declared = Number(response.headers?.get('content-length'));
-  if (Number.isFinite(declared) && declared > limit * 4) throw new PublicDemoError('tooLarge');
+  if (Number.isFinite(declared) && declared > limit * 4) { closeReader(response.body); throw new PublicDemoError('tooLarge'); }
   let size = 0;
   const accept = (text, final = false) => {
     if (signal.aborted) throw abortReason(signal);
@@ -89,6 +81,10 @@ async function smallBody(response, signal) {
 
 async function expectOk(response, signal) {
   if (response.ok) return;
+  if ([401, 402, 403, 404, 408, 429].includes(response.status) || response.status >= 500) {
+    closeReader(response.body);
+    throw publicDemoError(response.status);
+  }
   let detail = '';
   try { detail = await smallBody(response, signal); } catch { /* classify status only */ }
   if (signal.aborted) throw abortReason(signal);
@@ -126,8 +122,11 @@ export async function readPublicDemoStream(response, signal, onStatus, extract =
     if (!['generating', 'complete'].includes(kind)) return;
     let data;
     try { data = JSON.parse(raw); } catch { throw new PublicDemoError('protocol'); }
-    const snapshot = Array.isArray(data) ? extract(data) : null;
-    if (typeof snapshot !== 'string') throw new PublicDemoError('protocol');
+    if (!Array.isArray(data)) throw new PublicDemoError('protocol');
+    const snapshot = extract(data, kind);
+    // Some Gradio routes yield empty component updates before text exists.
+    // Only a complete event must contain a final textual answer.
+    if (kind === 'complete' && typeof snapshot !== 'string') throw new PublicDemoError('protocol');
     if (kind === 'generating') {
       if (!announced) { onStatus?.({ stage: 'thinking', message: 'Публичное демо формирует ответ…' }); announced = true; }
     } else {
@@ -170,9 +169,9 @@ export async function callPublicDemo({ model: id, systemPrompt, messages: conver
   // Validate BEFORE uploading a photo or consuming GPU quota.
   buildPublicDemoData(model, systemPrompt, conversation, imageB64 ? [{}] : [], tutorOnly);
   const { signal, cleanup } = linkAbortSignals(externalSignal, PUBLIC_DEMO_TIMEOUT_MS);
-  const request = (url, options = {}) => abortable(fetch(url, {
-    ...options, credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer', signal,
-  }), signal);
+  const request = (url, options = {}) => fetchAbortable(url, {
+    ...options, credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer',
+  }, signal);
   try {
     const files = [];
     if (imageB64) {

@@ -11,6 +11,11 @@ on:
         required: false
         type: boolean
         default: false
+      network_metadata:
+        description: 'Explicit read-only model/CORS diagnostics: GET metadata and OPTIONS, no inference, no Supabase'
+        required: false
+        type: boolean
+        default: false
       public_report_run:
         description: 'Report-only: read a previous public-route-smoke artifact by run ID (no new provider calls)'
         required: false
@@ -73,6 +78,23 @@ jobs:
         with:
           name: public-route-smoke
           path: .cache/public-smoke.json
+
+  network-metadata:
+    if: github.event_name == 'workflow_dispatch' && inputs.network_metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Read public API metadata and CORS headers (no inference or credentials)
+        run: node scripts/probe_ai_network.mjs --run-metadata
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-network-metadata
+          path: .cache/ai-network-report.json
 
   public-report:
     if: github.event_name == 'workflow_dispatch' && inputs.public_report_run != ''

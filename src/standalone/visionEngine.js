@@ -1,21 +1,14 @@
-import { assertAiAllowed, subscribeAccounts } from './accounts';
-import { raceFirstSuccess } from './network';
+import { assertAiAllowed, getCurrentAccount, subscribeAccounts } from './accounts';
+import { cloudConfigured } from '../cloud/bridge';
+import { isTutorModeEnabled, subscribeParentalControl } from './parentalControl';
+import { raceFirstSuccess, linkAbortSignals, fetchAbortable, fetchWithTimeout, withAbort, abortableDelay } from './network';
+import { callQwen35Gateway, callQwen25Gateway } from './legacyGateways';
+import { readPublicDemoJson, readPublicDemoStream, PublicDemoError } from './publicDemos';
 
-/**
- * Photo preprocessing and optional OCR (separate from direct multimodal inference).
- * Works in both HTTP Live Preview (via /api/vision-ocr server proxy) AND local file:// standalone mode!
- *
- * v3.1 Reliability & Anti-Hang Upgrades:
- *   0) Server Proxy (/api/vision-ocr) when served over HTTP/HTTPS — 1.2–3s, immune to ISP DPI/Cloudflare blocks
- *   1) Parallel Fast Cloud Race (Promise.any, <=14s):
- *      - Qwen2.5-VL-7B-Instruct (/qwen_vl_inference on non-Cloudflare AWS)
- *      - OCR.space Neural Engine 2 (OCREngine=2, ~1.5s)
- *   2) Parallel Secondary Non-Cloudflare Gradio OCR Race (<=10s):
- *      - GLM-OCR (/run_router) + Nanonets-OCR2-3B (/run_ocr)
- *   3) Hard-Timed Non-Cloudflare Local Browser Tesseract.js:
- *      - Fastly CDN (fastly.jsdelivr.net) + lightweight 4.0.0_fast tessdata on GitHub Fastly (1.6 MB vs 15 MB)
- *      - Strict 7s script timeout + 16s worker+recognize Promise.race timeout with worker.terminate() cleanup
- */
+// Explicit OCR is distinct from sending the original photo to the selected
+// Vision model. Retain the existing OCR routes, but bound every transport and
+// never accept a partial Gradio response or claim immunity to network failures.
+export const OCR_QWEN_TIMEOUT_MS = 60_000;
 
 const TESSERACT_FASTLY_SCRIPT = 'https://fastly.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
 const TESSERACT_FASTLY_WORKER = 'https://fastly.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js';
@@ -26,34 +19,9 @@ let tesseractLoadPromise = null;
 
 function canUseServerProxy() {
   if (typeof window === 'undefined') return false;
-  if (window.__STANDALONE_BUILD__) return false;
+  if (window.__STANDALONE_BUILD__ || cloudConfigured()) return false;
   const proto = window.location?.protocol || '';
   return proto === 'http:' || proto === 'https:';
-}
-
-function linkAbortSignals(externalSignal, timeoutMs) {
-  const controller = new AbortController();
-  let timer = null;
-  const onExternalAbort = () => {
-    controller.abort(new DOMException('Запрос отменён пользователем', 'AbortError'));
-  };
-  if (externalSignal) {
-    if (externalSignal.aborted) {
-      onExternalAbort();
-    } else {
-      externalSignal.addEventListener('abort', onExternalAbort, { once: true });
-    }
-  }
-  if (timeoutMs > 0) {
-    timer = setTimeout(() => {
-      controller.abort(new DOMException('Превышено время ожидания ответа', 'TimeoutError'));
-    }, timeoutMs);
-  }
-  const cleanup = () => {
-    if (timer) clearTimeout(timer);
-    if (externalSignal) externalSignal.removeEventListener('abort', onExternalAbort);
-  };
-  return { signal: controller.signal, cleanup };
 }
 
 function throwIfUserAborted(signal) {
@@ -91,18 +59,6 @@ export async function preparePhotoFile(file, options = {}) {
   } finally {
     URL.revokeObjectURL(url);
   }
-}
-
-function dataUriToBlob(dataUri) {
-  const parts = dataUri.split(',');
-  const mimeMatch = (parts[0] || '').match(/:(.*?);/);
-  const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-  const bstr = atob(parts[1] || '');
-  const u8 = new Uint8Array(bstr.length);
-  for (let i = 0; i < bstr.length; i += 1) {
-    u8[i] = bstr.charCodeAt(i);
-  }
-  return new Blob([u8], { type: mime });
 }
 
 /**
@@ -235,196 +191,28 @@ function cleanVisionOutput(raw) {
   return text;
 }
 
-function extractGradioSseString(sseBody) {
-  const lines = String(sseBody || '').split('\n');
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i].trim();
-    if (line === 'event: error') {
-      throw new Error('Gradio SSE error event');
-    }
-    if (line === 'event: complete' && i + 1 < lines.length) {
-      const dataLine = lines[i + 1].trim();
-      if (dataLine.startsWith('data:')) {
-        const parsed = JSON.parse(dataLine.slice(5).trim());
-        const out = Array.isArray(parsed) ? parsed[0] : parsed;
-        return cleanVisionOutput(typeof out === 'string' ? out : JSON.stringify(out));
-      }
-    }
-  }
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i].trim();
-    if (line.startsWith('data:')) {
-      try {
-        const parsed = JSON.parse(line.slice(5).trim());
-        if (parsed && Array.isArray(parsed) && typeof parsed[0] === 'string') {
-          return cleanVisionOutput(parsed[0]);
-        }
-      } catch {
-        // ignore partial line
-      }
-    }
-  }
-  return '';
+async function tryServerProxyOcr(imageDataUri, purpose, signal) {
+  const response = await fetchWithTimeout('/api/vision-ocr', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ imageBase64: imageDataUri, purpose: purpose === 'check' ? 'check' : 'solve' }),
+  }, 150000, signal);
+  if (!response.ok) throw new Error(`Сервер OCR: HTTP ${response.status}. Повтора из браузера нет.`);
+  const data = await response.json();
+  if (!data?.ok || !hasMeaningfulText(data.text)) throw new Error('Сервер OCR не вернул распознанный текст. Повтора из браузера нет.');
+  return { text: cleanVisionOutput(data.text), engine: data.engine || 'Серверный ИИ-сканер' };
 }
 
-/**
- * Tier 0: Server-side Vision/OCR proxy when running on Live Preview / local Python server.
- */
-async function tryServerProxyOcr(imageDataUri, purpose, externalSignal) {
-  const { signal, cleanup } = linkAbortSignals(externalSignal, 17000);
+async function tryQwenVision(call, image, purpose, externalSignal) {
+  const prompt = purpose === 'check'
+    ? 'Дословно перепиши весь рукописный и печатный текст, примеры, формулы и вычисления ученика с этого фото. НЕ ИСПРАВЛЯЙ ошибки ученика — перепиши ровно как в тетради! Выведи только распознанный текст без комментариев.'
+    : 'Дословно перепиши весь текст задания, числа, уравнения и формулы с этого фото. Выведи ТОЛЬКО распознанный текст задания без решения и вступлений.';
+  const { signal, cleanup } = linkAbortSignals(externalSignal, OCR_QWEN_TIMEOUT_MS);
   try {
-    const resp = await fetch('/api/vision-ocr', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        imageBase64: imageDataUri,
-        purpose: purpose === 'check' ? 'check' : 'solve',
-      }),
-      signal,
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const data = await resp.json();
-    if (!data?.ok || !hasMeaningfulText(data.text)) {
-      throw new Error(data?.error || 'Пустой ответ серверного OCR');
-    }
-    return {
-      text: cleanVisionOutput(data.text),
-      engine: data.engine || 'Серверный ИИ-сканер',
-    };
-  } finally {
-    cleanup();
-  }
-}
-
-/**
- * Tier 1A-0: Qwen3.5-Omni Official Multimodal Vision (/chat_predict on non-Cloudflare AWS, ~3s, no ZeroGPU limit!)
- */
-async function tryQwen35OmniVision(imageBlob, purpose = 'solve', externalSignal) {
-  const { signal, cleanup } = linkAbortSignals(externalSignal, 13500);
-  const spaceHost = 'https://qwen-qwen3-5-omni-offline-demo.hf.space';
-  try {
-    const form = new FormData();
-    form.append('files', imageBlob, 'homework.jpg');
-    const upResp = await fetch(`${spaceHost}/gradio_api/upload`, {
-      method: 'POST',
-      body: form,
-      signal,
-    });
-    if (!upResp.ok) throw new Error(`Upload HTTP ${upResp.status}`);
-    const uploaded = await upResp.json();
-    const remotePath = Array.isArray(uploaded) ? uploaded[0] : null;
-    if (!remotePath) throw new Error('Empty upload path');
-
-    const prompt =
-      purpose === 'check'
-        ? 'Дословно перепиши весь рукописный и печатный текст, примеры, формулы и вычисления ученика с этого фото. ВАЖНО: НЕ ИСПРАВЛЯЙ ошибки в словах и вычислениях ученика — перепиши ровно так, как написано в тетради! Выведи только распознанный текст без комментариев.'
-        : 'Дословно перепиши весь текст задания, числа, уравнения и формулы с этого фото (формулы можно в виде x^2, a/b или LaTeX). Выведи ТОЛЬКО распознанный текст задания без решения и без вступлений.';
-
-    const callResp = await fetch(`${spaceHost}/gradio_api/call/chat_predict`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        data: [
-          prompt,
-          null,
-          { path: remotePath, meta: { _type: 'gradio.FileData' } },
-          null,
-          [],
-          'Выведи только распознанный с изображения текст без лишних слов.',
-          0.2,
-          0.8,
-          20,
-        ],
-      }),
-      signal,
-    });
-    if (!callResp.ok) throw new Error(`Call HTTP ${callResp.status}`);
-    const { event_id: eventId } = await callResp.json();
-    if (!eventId) throw new Error('Missing event_id');
-
-    const sseResp = await fetch(`${spaceHost}/gradio_api/call/chat_predict/${eventId}`, { signal });
-    if (!sseResp.ok) throw new Error(`SSE HTTP ${sseResp.status}`);
-    const lines = (await sseResp.text()).split('\n');
-    let extracted = '';
-    for (let i = 0; i < lines.length; i += 1) {
-      const ln = lines[i].trim();
-      if (ln === 'event: error') throw new Error('Qwen3.5 SSE error');
-      if (ln === 'event: complete' && i + 1 < lines.length) {
-        const nxt = lines[i + 1].trim();
-        if (nxt.startsWith('data:')) {
-          const arr = JSON.parse(nxt.slice(5).trim());
-          const hist = Array.isArray(arr) ? arr[4] : null;
-          if (Array.isArray(hist) && hist.length > 0) {
-            const c = hist[hist.length - 1]?.content;
-            extracted = Array.isArray(c)
-              ? c.map((b) => (typeof b === 'string' ? b : b?.text || '')).join('\n')
-              : String(c || '');
-          }
-          break;
-        }
-      }
-    }
-    extracted = cleanVisionOutput(extracted);
-    if (!hasMeaningfulText(extracted)) throw new Error('Empty Qwen3.5-Omni output');
-
-    return {
-      text: extracted,
-      engine: 'Qwen 3.5 Omni (ИИ-зрение рукописи и формул)',
-    };
-  } finally {
-    cleanup();
-  }
-}
-
-/**
- * Tier 1A: Qwen2.5-VL-7B-Instruct Vision Space (/qwen_vl_inference on non-Cloudflare AWS)
- * Reads cursive Russian handwriting, crossed-out errors, equations, and printed tasks.
- */
-async function tryQwen25VlVision(imageBlob, purpose = 'solve', externalSignal) {
-  const { signal, cleanup } = linkAbortSignals(externalSignal, 14500);
-  const spaceHost = 'https://developer0hye-qwen2-5-vl-7b-instruct.hf.space';
-  try {
-    const form = new FormData();
-    form.append('files', imageBlob, 'homework.jpg');
-    const upResp = await fetch(`${spaceHost}/gradio_api/upload`, {
-      method: 'POST',
-      body: form,
-      signal,
-    });
-    if (!upResp.ok) throw new Error(`Upload HTTP ${upResp.status}`);
-    const uploaded = await upResp.json();
-    const remotePath = Array.isArray(uploaded) ? uploaded[0] : null;
-    if (!remotePath) throw new Error('Empty upload path');
-
-    const prompt =
-      purpose === 'check'
-        ? 'Ты — точный сканер школьных тетрадей. Дословно перепиши весь рукописный и печатный текст, примеры, формулы и вычисления ученика с этого фото. ВАЖНО: НЕ ИСПРАВЛЯЙ ошибки в словах и вычислениях ученика — перепиши ровно так, как написано в тетради! Выведи только распознанный текст без комментариев.'
-        : 'Ты — точный сканер школьных учебников и тетрадей. Дословно перепиши весь текст задания, числа, уравнения и формулы с этого фото (формулы можно записывать понятно, например x^2, a/b или в LaTeX). Выведи ТОЛЬКО распознанный текст задания без решения и без вступлений.';
-
-    const callResp = await fetch(`${spaceHost}/gradio_api/call/qwen_vl_inference`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        data: [{ path: remotePath, meta: { _type: 'gradio.FileData' } }, prompt],
-      }),
-      signal,
-    });
-    if (!callResp.ok) throw new Error(`Call HTTP ${callResp.status}`);
-    const { event_id: eventId } = await callResp.json();
-    if (!eventId) throw new Error('Missing event_id');
-
-    const sseResp = await fetch(`${spaceHost}/gradio_api/call/qwen_vl_inference/${eventId}`, { signal });
-    if (!sseResp.ok) throw new Error(`SSE HTTP ${sseResp.status}`);
-    const extracted = extractGradioSseString(await sseResp.text());
-    if (!hasMeaningfulText(extracted)) throw new Error('Empty Qwen2.5-VL output');
-
-    return {
-      text: extracted,
-      engine: 'Qwen2.5-VL (ИИ-зрение рукописи и формул)',
-    };
-  } finally {
-    cleanup();
-  }
+    const result = await call('Перепиши изображение дословно, без решения и комментариев.', [{role:'user',content:prompt}], signal, image);
+    const text = cleanVisionOutput(result.text);
+    if (!hasMeaningfulText(text)) throw new PublicDemoError('empty');
+    return { text, engine: result.used + ' · OCR' };
+  } finally { cleanup(); }
 }
 
 /**
@@ -432,7 +220,7 @@ async function tryQwen25VlVision(imageBlob, purpose = 'solve', externalSignal) {
  */
 async function tryOcrSpaceNeural(dataUri, externalSignal, delayMs = 0) {
   if (delayMs > 0) {
-    await new Promise((r) => setTimeout(r, delayMs));
+    await abortableDelay(delayMs, externalSignal);
     throwIfUserAborted(externalSignal);
   }
   const { signal, cleanup } = linkAbortSignals(externalSignal, 9500);
@@ -450,11 +238,10 @@ async function tryOcrSpaceNeural(dataUri, externalSignal, delayMs = 0) {
     form.append('isTable', 'true');
     form.append('detectOrientation', 'true');
 
-    const resp = await fetch('https://api.ocr.space/parse/image', {
+    const resp = await fetchWithTimeout('https://api.ocr.space/parse/image', {
       method: 'POST',
-      body: form,
-      signal,
-    });
+      body: form, credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer',
+    }, 9500, signal);
     if (!resp.ok) throw new Error(`OCR.space HTTP ${resp.status}`);
     const json = await resp.json();
     if (json.IsErroredOnProcessing) {
@@ -476,68 +263,25 @@ async function tryOcrSpaceNeural(dataUri, externalSignal, delayMs = 0) {
   }
 }
 
-/**
- * Tier 2A: GLM-OCR Vision Space (/run_router — direct base64 input, non-Cloudflare AWS)
- */
-async function tryGlmOcrVision(dataUri, externalSignal) {
-  const { signal, cleanup } = linkAbortSignals(externalSignal, 10000);
-  const spaceHost = 'https://prithivmlmods-glm-ocr-demo.hf.space';
+async function gradioOcr(host, name, data, timeout, externalSignal) {
+  const { signal, cleanup } = linkAbortSignals(externalSignal, timeout);
+  const request = (url, init = {}) => fetchAbortable(url, { ...init, credentials:'omit', redirect:'error', referrerPolicy:'no-referrer' }, signal);
   try {
-    const callResp = await fetch(`${spaceHost}/gradio_api/call/run_router`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ data: ['Text', dataUri, 2048, 30] }),
-      signal,
-    });
-    if (!callResp.ok) throw new Error(`Call HTTP ${callResp.status}`);
-    const { event_id: eventId } = await callResp.json();
-    if (!eventId) throw new Error('Missing event_id');
-    const sseResp = await fetch(`${spaceHost}/gradio_api/call/run_router/${eventId}`, { signal });
-    if (!sseResp.ok) throw new Error(`SSE HTTP ${sseResp.status}`);
-    const extracted = extractGradioSseString(await sseResp.text());
-    if (!hasMeaningfulText(extracted)) throw new Error('Invalid GLM-OCR output');
-    return { text: extracted, engine: 'GLM-OCR (ИИ-сканер формул)' };
-  } finally {
-    cleanup();
-  }
+    const base = `${host}/gradio_api/call/${name}`;
+    const session = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
+    const submitted = await readPublicDemoJson(await request(base, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({data,session_hash:session}) }), signal);
+    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(submitted?.event_id || '')) throw new PublicDemoError('protocol');
+    const text = cleanVisionOutput(await readPublicDemoStream(await request(`${base}/${submitted.event_id}`), signal));
+    if (!hasMeaningfulText(text)) throw new PublicDemoError('empty');
+    return text;
+  } finally { cleanup(); }
 }
-
-/**
- * Tier 2B: Nanonets-OCR2-3B Vision Space (/run_ocr — direct base64 input, non-Cloudflare AWS)
- */
-async function tryNanonetsOcrVision(dataUri, externalSignal) {
-  const { signal, cleanup } = linkAbortSignals(externalSignal, 10500);
-  const spaceHost = 'https://prithivmlmods-multimodal-ocr3.hf.space';
-  try {
-    const callResp = await fetch(`${spaceHost}/gradio_api/call/run_ocr`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        data: [
-          'Nanonets-OCR2-3B',
-          'Перепиши весь русский и английский текст, числа и формулы с этого изображения без изменений.',
-          dataUri,
-          1500,
-          0.2,
-          0.9,
-          50,
-          1.1,
-          30,
-        ],
-      }),
-      signal,
-    });
-    if (!callResp.ok) throw new Error(`Call HTTP ${callResp.status}`);
-    const { event_id: eventId } = await callResp.json();
-    if (!eventId) throw new Error('Missing event_id');
-    const sseResp = await fetch(`${spaceHost}/gradio_api/call/run_ocr/${eventId}`, { signal });
-    if (!sseResp.ok) throw new Error(`SSE HTTP ${sseResp.status}`);
-    const extracted = extractGradioSseString(await sseResp.text());
-    if (!hasMeaningfulText(extracted)) throw new Error('Invalid Nanonets output');
-    return { text: extracted, engine: 'Nanonets-OCR2 (ИИ-зрение)' };
-  } finally {
-    cleanup();
-  }
+async function tryGlmOcrVision(image, signal) {
+  return { text:await gradioOcr('https://prithivmlmods-glm-ocr-demo.hf.space', 'run_router', ['Text',image,2048,30],10000,signal), engine:'GLM-OCR (ИИ-сканер формул)' };
+}
+async function tryNanonetsOcrVision(image, signal) {
+  return { text:await gradioOcr('https://prithivmlmods-multimodal-ocr3.hf.space', 'run_ocr',
+    ['Nanonets-OCR2-3B','Перепиши весь русский и английский текст, числа и формулы с этого изображения без изменений.',image,1500,0.2,0.9,50,1.1,30],10500,signal), engine:'Nanonets-OCR2 (ИИ-зрение)' };
 }
 
 /**
@@ -604,22 +348,18 @@ async function tryLocalTesseractOcr(dataUri, onProgress, externalSignal) {
     maxDim: 1550,
     jpegQuality: 0.9,
   });
+  throwIfUserAborted(externalSignal);
 
   let workerRef = null;
   let finished = false;
   let timeoutId = null;
 
-  const cleanupWorker = async () => {
+  const terminate = worker => { try { Promise.resolve(worker?.terminate()).catch(() => {}); } catch { /* already closed */ } };
+  const cleanupWorker = () => {
     if (timeoutId) clearTimeout(timeoutId);
-    const w = workerRef;
-    workerRef = null;
-    if (w) {
-      try {
-        await w.terminate();
-      } catch {
-        // ignore terminate errors
-      }
-    }
+    const w = workerRef; workerRef = null;
+    // A broken worker shutdown must not defeat Stop or the OCR deadline.
+    terminate(w);
   };
 
   const onUserAbort = () => {
@@ -635,7 +375,7 @@ async function tryLocalTesseractOcr(dataUri, onProgress, externalSignal) {
         cleanupWorker();
         reject(
           new Error(
-            'Превышено время ожидания чтения фото (возможно, провайдер ограничивает загрузку словаря). Введите условие текстом или подключите бесплатный ключ Google Gemini в «Настройках ИИ».'
+            'Превышено время ожидания чтения фото (возможно, провайдер ограничивает загрузку словаря). Введите условие текстом или явно выберите другую модель для фото.'
           )
         );
       }, 16000);
@@ -668,7 +408,7 @@ async function tryLocalTesseractOcr(dataUri, onProgress, externalSignal) {
         },
       });
       if (finished) {
-        await worker.terminate();
+        terminate(worker);
         throw new DOMException('Сканирование завершено.', 'AbortError');
       }
       workerRef = worker;
@@ -697,7 +437,7 @@ async function tryLocalTesseractOcr(dataUri, onProgress, externalSignal) {
       };
     })();
 
-    return await Promise.race([recognizePromise, timeoutPromise]);
+    return await withAbort(Promise.race([recognizePromise, timeoutPromise]), externalSignal);
   } finally {
     finished = true;
     externalSignal?.removeEventListener('abort', onUserAbort);
@@ -707,20 +447,28 @@ async function tryLocalTesseractOcr(dataUri, onProgress, externalSignal) {
 
 /**
  * Master recognition pipeline used by BOTH HomeworkSolver AND DraftChecker ("Проверь мою работу").
- * Fast, parallelized, and strictly time-bounded so it NEVER hangs on any stage!
+ * Existing OCR cascade with explicit per-route deadlines and account cancellation.
  */
 export async function recognizeHomeworkPhoto(imageDataUri, optsOrCallback = {}) {
   assertAiAllowed();
   const options = typeof optsOrCallback === 'function' ? { onProgress: optsOrCallback } : optsOrCallback;
+  const scope = getCurrentAccount()?.id || 'guest', policy = isTutorModeEnabled();
   const controller = new AbortController();
   const abort = () => controller.abort();
   if (options.signal?.aborted) abort();
   else options.signal?.addEventListener('abort', abort, { once: true });
-  const unsubscribe = subscribeAccounts(() => { try { assertAiAllowed(); } catch { abort(); } });
+  const unsubscribe = subscribeAccounts(() => { try { assertAiAllowed(); if ((getCurrentAccount()?.id || 'guest') !== scope) abort(); } catch { abort(); } });
+  const stopPolicy = subscribeParentalControl(() => { if (isTutorModeEnabled() !== policy) abort(); });
+  const { signal, cleanup } = linkAbortSignals(controller.signal, 180000);
   try {
-    const result = await recognizeHomeworkPhotoInternal(imageDataUri, { ...options, signal: controller.signal });
-    throwIfUserAborted(controller.signal); assertAiAllowed(); return result;
-  } finally { unsubscribe(); options.signal?.removeEventListener('abort', abort); }
+    const result = await withAbort(recognizeHomeworkPhotoInternal(imageDataUri, { ...options, signal,
+      onProgress: info => { if (!signal.aborted) options.onProgress?.(info); },
+    }), signal);
+    throwIfUserAborted(signal); assertAiAllowed(); return result;
+  } catch (error) {
+    if (signal.aborted && !controller.signal.aborted) throw new Error('Истекло общее ожидание OCR (3 минуты). Повтор автоматически не выполняется.');
+    throw error;
+  } finally { cleanup(); unsubscribe(); stopPolicy(); options.signal?.removeEventListener('abort', abort); }
 }
 
 async function recognizeHomeworkPhotoInternal(imageDataUri, optsOrCallback = {}) {
@@ -750,7 +498,7 @@ async function recognizeHomeworkPhotoInternal(imageDataUri, optsOrCallback = {})
   });
   throwIfUserAborted(signal);
 
-  // 0. Server-side Vision/OCR proxy when running on HTTP/HTTPS Live Preview (~1.2–3.5s)
+  // Only the Python distribution uses this route; a static cloud site does not.
   if (canUseServerProxy()) {
     onProgress?.({
       stage: 'vision_server',
@@ -758,7 +506,7 @@ async function recognizeHomeworkPhotoInternal(imageDataUri, optsOrCallback = {})
       message:
         purpose === 'check'
           ? 'Серверное ИИ-зрение считывает почерк и вычисления ученика...'
-          : 'Серверное ИИ-зрение мгновенно считывает задание и формулы...',
+          : 'Серверное ИИ-зрение считывает задание и формулы...',
     });
     try {
       const r0 = await tryServerProxyOcr(preparedDataUri, purpose, signal);
@@ -766,13 +514,12 @@ async function recognizeHomeworkPhotoInternal(imageDataUri, optsOrCallback = {})
       return r0;
     } catch (err) {
       if (err?.name === 'AbortError' || signal?.aborted) throw err;
-      // Fall through seamlessly to browser cloud cascade
+      // The server may already have sent the photo: never duplicate its work.
+      throw err;
     }
   }
 
-  const imageBlob = dataUriToBlob(preparedDataUri);
-
-  // 1. Parallel Fast Cloud Race: Qwen2.5-VL (/qwen_vl_inference, AWS non-CF) + OCR.space Engine 2
+  // 1. Existing Qwen + OCR.space race. A winner cancels the other local waits.
   onProgress?.({
     stage: 'vision_qwen',
     progress: 42,
@@ -783,8 +530,8 @@ async function recognizeHomeworkPhotoInternal(imageDataUri, optsOrCallback = {})
   });
   try {
     const r1 = await raceFirstSuccess([
-      (childSignal) => tryQwen35OmniVision(imageBlob, purpose, childSignal),
-      (childSignal) => tryQwen25VlVision(imageBlob, purpose, childSignal),
+      (childSignal) => tryQwenVision(callQwen35Gateway, preparedDataUri, purpose, childSignal),
+      (childSignal) => tryQwenVision(callQwen25Gateway, preparedDataUri, purpose, childSignal),
       (childSignal) => tryOcrSpaceNeural(preparedDataUri, childSignal, purpose === 'check' ? 1400 : 0),
     ], signal);
     onProgress?.({ stage: 'done', progress: 100, message: `Прочитано (${r1.engine})` });
@@ -810,7 +557,7 @@ async function recognizeHomeworkPhotoInternal(imageDataUri, optsOrCallback = {})
     throwIfUserAborted(signal);
   }
 
-  // 3. Hard-timed Non-Cloudflare Local Browser Tesseract.js (Fastly CDN, <=16s guaranteed!)
+  // 3. Local Tesseract with a separate bounded worker wait.
   onProgress?.({
     stage: 'ocr_fallback',
     progress: 72,

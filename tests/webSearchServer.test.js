@@ -12,9 +12,10 @@ function setup(overrides={}, authError=false,reservation={data:true,error:null})
   let handler; const env={SUPABASE_URL:'https://fixture.supabase.co',SUPABASE_ANON_KEY:'public-fixture',SUPABASE_SERVICE_ROLE_KEY:'server-fixture',TAVILY_API_KEY:'tvly-owner-fixture',DOMASHKA_ALLOWED_ORIGINS:'https://site.pages.dev',...overrides};
   const auth=vi.fn(async()=>({data:{user:authError?null:{id:actor}},error:authError?new Error('bad'):null})); const rpc=vi.fn(async()=>reservation);
   const external=vi.fn(async()=>result({results:[{title:'Источник',url:'https://example.org/',content:'Выдержка'}]}));
-  vm.runInNewContext(code,{Deno:{env:{get:(key)=>env[key]},serve:(f)=>{handler=f;}},createClient:()=>({auth:{getUser:auth},rpc}),URL,Response,Request,AbortSignal,TextDecoder,Uint8Array,Date,atob,fetch:external});
+  const createClient=vi.fn(()=>({auth:{getUser:auth},rpc}));
+  vm.runInNewContext(code,{Deno:{env:{get:(key)=>env[key]},serve:(f)=>{handler=f;}},createClient,URL,Response,Request,AbortSignal,AbortController,DOMException,TextDecoder,Uint8Array,Date,atob,setTimeout,clearTimeout,fetch:external});
   const call=(body={query:'закон Ома',requestId:crypto.randomUUID()},headers={})=>handler(new Request('https://fixture.supabase.co/functions/v1/web-search',{method:'POST',headers:{Origin:'https://site.pages.dev',Authorization:`Bearer ${token}`,...headers},body:JSON.stringify(body)}));
-  return {call,handler,auth,rpc,external};
+  return {call,handler,auth,rpc,external,createClient};
 }
 describe('server-only Tavily function',()=>{
   it('validates Auth, then real-session reservation, then a single fixed basic search',async()=>{
@@ -44,5 +45,36 @@ describe('server-only Tavily function',()=>{
   it('rejects huge response bodies and strips unsafe URLs',async()=>{
     const s=setup();s.external.mockResolvedValueOnce(result({results:[{url:'javascript:alert(1)'},{url:'http://127.0.0.1'},{url:'https://example.org/',content:'x'.repeat(1500)}]}));expect((await (await s.call()).json()).results).toHaveLength(1);
     s.external.mockResolvedValueOnce(new Response('x'.repeat(100001)));expect((await s.call()).status).toBe(502);
+  });
+});
+
+describe('search readiness, failure stages and total budget',()=>{
+  it('allows a permitted preflight even when service credentials are missing, then returns a readable 503',async()=>{
+    const s=setup({SUPABASE_SERVICE_ROLE_KEY:''});const preflight=await s.handler(new Request('https://fixture.supabase.co',{method:'OPTIONS',headers:{Origin:'https://site.pages.dev'}}));
+    expect(preflight.status).toBe(204);expect(preflight.headers.get('Access-Control-Allow-Origin')).toBe('https://site.pages.dev');expect(preflight.headers.get('Access-Control-Allow-Headers')).toContain('authorization');
+    const r=await s.call();expect(r.status).toBe(503);expect(r.headers.get('Access-Control-Allow-Origin')).toBe('https://site.pages.dev');expect(r.headers.get('X-Domashka-Search-Version')).toBe('4.5');expect(await r.json()).toMatchObject({code:'SEARCH_SETUP_REQUIRED',version:'4.5'});expect(s.auth).not.toHaveBeenCalled();
+  });
+  it.each([['PGRST202','SEARCH_SETUP_REQUIRED'],['42P01','SEARCH_SETUP_REQUIRED'],['42883','SEARCH_SETUP_REQUIRED'],['08006','SEARCH_BACKEND_UNAVAILABLE'],['','SEARCH_BACKEND_UNAVAILABLE']])('does not mislabel RPC %s as an exhausted quota',async(code,expected)=>{
+    const s=setup({},false,{data:null,error:{code,message:'PRIVATE_SENTINEL'}});const r=await s.call();expect(r.status).toBe(503);expect(await r.json()).toMatchObject({code:expected});expect(s.external).not.toHaveBeenCalled();
+  });
+  it('separates a real Auth service 503 from invalid credentials',async()=>{
+    const s=setup();s.auth.mockResolvedValue({data:{user:null},error:{status:503,message:'PRIVATE_SENTINEL'}});const r=await s.call();expect(r.status).toBe(503);expect(await r.json()).toMatchObject({code:'SEARCH_BACKEND_UNAVAILABLE'});expect(s.rpc).not.toHaveBeenCalled();expect(s.external).not.toHaveBeenCalled();
+  });
+  it.each([[503,503,'SEARCH_UPSTREAM_UNAVAILABLE'],[429,429,'SEARCH_UPSTREAM_QUOTA'],[401,502,'SEARCH_UPSTREAM_AUTH']])('classifies Tavily HTTP %s separately from site setup',async(status,http,code)=>{
+    const s=setup();s.external.mockResolvedValue(result({error:'PRIVATE_SENTINEL'},status));const r=await s.call();expect(r.status).toBe(http);const body=await r.json();expect(body.code).toBe(code);expect(JSON.stringify(body)).not.toContain('PRIVATE_SENTINEL');expect(s.rpc).toHaveBeenCalledTimes(1);expect(s.external).toHaveBeenCalledTimes(1);
+  });
+  it('rejects a malformed success body rather than claiming missing setup',async()=>{
+    const s=setup();s.external.mockResolvedValue(new Response('not-json PRIVATE_SENTINEL'));const r=await s.call();expect(r.status).toBe(502);expect(await r.json()).toMatchObject({code:'SEARCH_UPSTREAM_PROTOCOL'});expect(s.external).toHaveBeenCalledTimes(1);
+  });
+  it.each(['auth','rpc'])('bounds a silent %s phase and never starts a late provider request',async(phase)=>{
+    vi.useFakeTimers();const s=setup();let finish;s[phase].mockImplementation(()=>new Promise(resolve=>{finish=resolve;}));const pending=s.call();await vi.advanceTimersByTimeAsync(30001);const r=await pending;expect(r.status).toBe(504);expect(await r.json()).toMatchObject({code:'SEARCH_TIMEOUT'});expect(s.external).not.toHaveBeenCalled();
+    finish(phase==='auth'?{data:{user:{id:actor}},error:null}:{data:true,error:null});await Promise.resolve();expect(s.external).not.toHaveBeenCalled();expect(vi.getTimerCount()).toBe(0);
+  });
+  it('enforces the 18-second provider timeout even when fetch ignores cancellation, without refund/retry',async()=>{
+    vi.useFakeTimers();const s=setup();s.external.mockImplementation(()=>new Promise(()=>{}));const pending=s.call();await vi.advanceTimersByTimeAsync(18001);const r=await pending;expect(r.status).toBe(504);expect(await r.json()).toMatchObject({code:'SEARCH_TIMEOUT'});expect(s.external).toHaveBeenCalledTimes(1);expect(s.rpc).toHaveBeenCalledTimes(1);expect(vi.getTimerCount()).toBe(0);
+  });
+  it('clears all timers on success and injects the deadline into Auth and SQL clients',async()=>{
+    vi.useFakeTimers();const s=setup();expect((await s.call()).status).toBe(200);expect(vi.getTimerCount()).toBe(0);
+    for(const [,,options]of s.createClient.mock.calls)expect(typeof options.global.fetch).toBe('function');
   });
 });
