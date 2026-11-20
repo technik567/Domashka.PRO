@@ -17,7 +17,17 @@ on:
         type: boolean
         default: false
       pollinations_workflow:
-        description: 'Explicit synthetic planning/answer/review: at most 3 Pollinations streaming calls, no live search/Auth/photos/retries'
+        description: 'Explicit synthetic answer-or-search/review: at most 2 Pollinations streaming calls, no live search/Auth/photos/retries'
+        required: false
+        type: boolean
+        default: false
+      search_workflow:
+        description: 'Explicit synthetic search regression: up to 2 Pollinations calls + 1 real keyless Tavily search, no Auth/photos/keys/retries'
+        required: false
+        type: boolean
+        default: false
+      pollinations_diagnostic:
+        description: 'ONE synthetic Pollinations response inspection, fixed structural codes only, no search/accounts/retries'
         required: false
         type: boolean
         default: false
@@ -121,7 +131,7 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Synthetic production planner and review, NO live search/Auth/retries
+      - name: Synthetic initial answer and review, NO live search/Auth/retries
         run: |
           npx esbuild scripts/probe_legacy_routes.mjs --bundle --platform=node --format=esm --outfile=.cache/probe-legacy-routes.mjs
           node .cache/probe-legacy-routes.mjs --run-workflow
@@ -130,6 +140,48 @@ jobs:
         with:
           name: pollinations-workflow-report
           path: .cache/pollinations-workflow-report.json
+
+  search-workflow:
+    if: github.event_name == 'workflow_dispatch' && inputs.search_workflow
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: One synthetic search workflow, no accounts or refusal retries
+        run: |
+          npx esbuild scripts/probe_search_workflow.mjs --bundle --platform=node --format=esm --outfile=.cache/probe-search-workflow.mjs
+          node .cache/probe-search-workflow.mjs --run-live
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: search-workflow-report
+          path: .cache/search-workflow-report.json
+
+  pollinations-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.pollinations_diagnostic
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Inspect one synthetic response shape, no search or retry loop
+        run: |
+          npx esbuild scripts/probe_search_workflow.mjs --bundle --platform=node --format=esm --outfile=.cache/probe-search-workflow.mjs
+          node .cache/probe-search-workflow.mjs --inspect-response
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pollinations-diagnostic-report
+          path: .cache/pollinations-diagnostic-report.json
 
   network-metadata:
     if: github.event_name == 'workflow_dispatch' && inputs.network_metadata

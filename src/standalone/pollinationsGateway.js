@@ -9,10 +9,13 @@ export const POLLINATIONS_MODEL = config.pollinationsModel;
 const ENDPOINT = 'https://text.pollinations.ai/openai';
 const MAX_RESPONSE = 2_000_000;
 const MAX_EVENT = 100_000;
+// Fixed structural diagnostics only; never provider text, prompts or keys.
+const DIAGNOSTICS = new Set(['envelope','event-json','json-body','json-choice','content-type','declared-size','response-size','event-size','answer-size',
+  'finish-tool_calls','finish-function_call','finish-content_filter','finish-other','upstream-quota','upstream-context','upstream-tools','upstream-other','transport-exception']);
 const cancel = body => { try { Promise.resolve(body?.cancel()).catch(() => {}); } catch { /* already closed */ } };
 
 export class PollinationsError extends Error {
-  constructor(code, status = 0, retryAfterSeconds = 0) {
+  constructor(code, status = 0, retryAfterSeconds = 0, diagnostic = '') {
     const http = Number.isInteger(status) && status >= 400 && status <= 599 ? status : 0;
     const wait = Number.isInteger(retryAfterSeconds) && retryAfterSeconds > 0 && retryAfterSeconds <= 3600 ? retryAfterSeconds : 0;
     const messages = {
@@ -27,8 +30,12 @@ export class PollinationsError extends Error {
       image: 'Этот маршрут Pollinations не принимает само фото. Выберите Vision-модель или режим OCR.',
       context: 'Задание и история превышают безопасный объём этого подключения. Сократите задание или начните новый диалог.',
     };
-    super(`${messages[code] || messages.protocol}${http ? ` HTTP ${http}.` : ''}${wait ? ` Сервис просит подождать не менее ${wait} с.` : ''} Автоматического повтора и оплаты нет.`);
+    const message = code === 'protocol' && ['finish-tool_calls','finish-function_call'].includes(diagnostic)
+      ? 'Pollinations запросил собственный инструмент вместо текста. Такой вызов не выполняется; поиск приложения запускается только по проверенной текстовой команде.'
+      : messages[code] || messages.protocol;
+    super(`${message}${http ? ` HTTP ${http}.` : ''}${wait ? ` Сервис просит подождать не менее ${wait} с.` : ''} Автоматического повтора и оплаты нет.`);
     this.name = 'PollinationsError'; this.code = `pollinations-${code}`; this.status = http; this.retryAfterSeconds = wait;
+    this.diagnostic = DIAGNOSTICS.has(diagnostic) ? diagnostic : '';
   }
 }
 function statusError(response) {
@@ -44,46 +51,53 @@ function statusError(response) {
 export async function readPollinationsResponse(response, signal, onStatus) {
   let answer = '', complete = false, reason = '', pending = '', size = 0;
   function consume(data, json = false) {
-    if (!data || typeof data !== 'object' || data.error) throw new PollinationsError('protocol');
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new PollinationsError('protocol', 0, 0, 'envelope');
+    if (data.error) {
+      const detail = (typeof data.error === 'string' ? data.error : String(data.error.code || '') + ' ' + String(data.error.message || '')).slice(0, 8192);
+      const category = /quota|rate.?limit|too many requests|insufficient.*(?:credit|balance)/i.test(detail) ? 'quota'
+        : /context|token.*(?:limit|budget)|max[_ ]?(?:completion[_ ]?)?tokens/i.test(detail) ? 'context'
+        : /tool[_ ]?call|tool_choice|unsupported.*tool/i.test(detail) ? 'tools' : 'other';
+      throw new PollinationsError('protocol', 0, 0, `upstream-${category}`);
+    }
     const choice = data.choices?.[0];
-    if (!choice) { if (json) throw new PollinationsError('protocol'); return; }
+    if (!choice) { if (json) throw new PollinationsError('protocol', 0, 0, 'json-choice'); return; }
     const value = json ? choice.message?.content : choice.delta?.content;
     if (typeof value === 'string') {
       answer += value;
-      if (answer.length > MAX_EVENT) throw new PollinationsError('protocol');
+      if (answer.length > MAX_EVENT) throw new PollinationsError('protocol', 0, 0, 'answer-size');
       if (value) onStatus?.({stage:'streaming', receivedChars:answer.length, message:'Pollinations формирует текст ответа…'});
     }
     if (choice.finish_reason) {
       reason = choice.finish_reason;
-      if (!['stop', 'length'].includes(reason)) throw new PollinationsError('protocol');
+      if (!['stop', 'length'].includes(reason)) throw new PollinationsError('protocol', 0, 0, `finish-${['tool_calls','function_call','content_filter'].includes(reason) ? reason : 'other'}`);
       complete = true;
     }
     if (json) complete = true;
   }
   function event(block) {
     if (complete || !block.trim()) return;
-    if (block.length > MAX_EVENT) throw new PollinationsError('protocol');
+    if (block.length > MAX_EVENT) throw new PollinationsError('protocol', 0, 0, 'event-size');
     const raw = block.replace(/^\uFEFF/, '').split('\n').filter(line => line.startsWith('data:'))
       .map(line => line.slice(5).trimStart()).join('\n').trim();
     if (!raw) return; // comments/heartbeats are not completions
     if (raw === '[DONE]') { complete = true; return; }
     let data;
-    try { data = JSON.parse(raw); } catch { throw new PollinationsError('protocol'); }
+    try { data = JSON.parse(raw); } catch { throw new PollinationsError('protocol', 0, 0, 'event-json'); }
     consume(data);
   }
   const type = response.headers?.get('content-type') || '';
   const isJson = type.includes('application/json');
-  if (!isJson && !type.includes('text/event-stream')) throw new PollinationsError('protocol');
-  if (Number(response.headers?.get('content-length')) > MAX_RESPONSE) throw new PollinationsError('protocol');
+  if (!isJson && !type.includes('text/event-stream')) throw new PollinationsError('protocol', 0, 0, 'content-type');
+  if (Number(response.headers?.get('content-length')) > MAX_RESPONSE) throw new PollinationsError('protocol', 0, 0, 'declared-size');
   function chunk(text, final = false) {
     throwIfAborted(signal);
     size += text.length;
-    if (size > MAX_RESPONSE) throw new PollinationsError('protocol');
+    if (size > MAX_RESPONSE) throw new PollinationsError('protocol', 0, 0, 'response-size');
     pending += text;
     if (isJson) {
       if (final) {
         let data;
-        try { data = JSON.parse(pending); } catch { throw new PollinationsError('protocol'); }
+        try { data = JSON.parse(pending); } catch { throw new PollinationsError('protocol', 0, 0, 'json-body'); }
         consume(data, true); pending = '';
       }
       return;
@@ -93,7 +107,7 @@ export async function readPollinationsResponse(response, signal, onStatus) {
       event(pending.slice(0, delimiter.index).replace(/\r\n/g, '\n'));
       pending = pending.slice(delimiter.index + delimiter[0].length);
     }
-    if (!complete && pending.length > MAX_EVENT) throw new PollinationsError('protocol');
+    if (!complete && pending.length > MAX_EVENT) throw new PollinationsError('protocol', 0, 0, 'event-size');
     if (final && !complete && pending.trim()) event(pending.replace(/\r\n/g, '\n'));
   }
   const reader = response.body?.getReader();
@@ -133,7 +147,9 @@ export async function callPollinationsStream(systemPrompt, messages, externalSig
         method:'POST', credentials:'omit', referrerPolicy:'no-referrer', redirect:'error',
         headers:{'Content-Type':'application/json', Accept:'text/event-stream'},
         body:JSON.stringify({model:POLLINATIONS_MODEL, messages:[{role:'system',content:String(systemPrompt || '')}, ...turns],
-          stream:true, temperature:0.35}),
+          // Native calls are not the app's bounded text search action. The
+          // legacy origin forwards this standard option to its model backend.
+          stream:true, temperature:0.35, tool_choice:'none'}),
       }, signal);
     } catch { throw new PollinationsError('network'); }
     if (!response.ok) throw statusError(response);
@@ -143,6 +159,6 @@ export async function callPollinationsStream(systemPrompt, messages, externalSig
     throwIfAborted(externalSignal);
     if (signal.aborted || error?.name === 'TimeoutError') throw new PollinationsError('timeout');
     if (error instanceof PollinationsError) throw error;
-    throw new PollinationsError(error instanceof TypeError ? 'network' : 'protocol');
+    throw new PollinationsError(error instanceof TypeError ? 'network' : 'protocol', 0, 0, 'transport-exception');
   } finally { cancel(response?.body); cleanup(); }
 }

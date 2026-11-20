@@ -51,18 +51,18 @@ export async function probeLegacyRoutes(fetchImpl=globalThis.fetch) {
   return report;
 }
 // Separate opt-in: the real production workflow, but a synthetic arithmetic
-// question and a fail-closed search stub. At most plan + answer + one review;
+// question and a fail-closed search stub. At most answer-or-search + one review;
 // never calls HF, Tavily, Supabase, Auth or a payment API. NOT an E2E site test.
 export async function probePollinationsWorkflow(fetchImpl=globalThis.fetch) {
-  const report={schemaVersion:1,kind:'pollinations-workflow',scope:'Synthetic planner + answer + review using the production workflow and streaming adapter. No live search, account, photo or physical phone.',checkedAt:new Date().toISOString(),status:'not-verified',requests:[],searchAttempts:0};
+  const report={schemaVersion:1,kind:'pollinations-workflow',scope:'Synthetic answer-or-search + review using the production workflow and streaming adapter. No live search, account, photo or physical phone.',checkedAt:new Date().toISOString(),status:'not-verified',requests:[],searchAttempts:0};
   const original=globalThis.fetch,controller=new AbortController();
-  const deadline=setTimeout(()=>controller.abort(),370000);let calls=0;
+  const deadline=setTimeout(()=>controller.abort(),250000);let calls=0;
   globalThis.fetch=async(url,init={})=>{
-    if(url!=='https://text.pollinations.ai/openai'||++calls>3)throw new Error('probe-target-or-budget');
+    if(url!=='https://text.pollinations.ai/openai'||++calls>2)throw new Error('probe-target-or-budget');
     const headers=new Headers(init.headers);headers.set('Origin',ORIGIN);
     const started=Date.now(),response=await fetchImpl(url,{...init,headers});
     const cors=response.headers?.get('access-control-allow-origin');
-    report.requests.push({stage:['plan','answer','review-1'][calls-1],status:response.status,headersElapsedMs:Date.now()-started,
+    report.requests.push({stage:['answer-or-search','review-1'][calls-1],status:response.status,headersElapsedMs:Date.now()-started,
       cors:cors===ORIGIN?'match':cors==='*'?'wildcard':cors?'other':'missing',contentType:(response.headers?.get('content-type')||'').split(';')[0]});
     return response;
   };
@@ -75,18 +75,18 @@ export async function probePollinationsWorkflow(fetchImpl=globalThis.fetch) {
     const expected=output.text.length<3000&&/(?:^|\D)4(?:\D|$)/.test(output.text);
     report.workflow={calls:output.workflow.calls,searches:output.workflow.searches,verified:output.workflow.verified,elapsedMs:output.workflow.elapsedMs};
     report.answerLength=output.text.length;report.expectedNumberFound=expected;
-    if(expected&&output.workflow.calls===3&&output.workflow.searches===0&&output.workflow.verified===1&&report.searchAttempts===0)report.status='verified';
+    if(expected&&output.workflow.calls===2&&output.workflow.searches===0&&output.workflow.verified===1&&report.searchAttempts===0)report.status='verified';
   }catch(error){
     const code=String(error.code||error.name||'failure');report.errorCode=/^[a-zA-Z0-9_-]{1,60}$/.test(code)?code:'failure';
     report.httpStatus=Number.isInteger(error.status)?error.status:0;
-    report.stage=['plan','answer','review-1','search-1'].includes(error.stage)?error.stage:'unknown';
+    report.stage=['answer-or-search','answer','review-1','search-1'].includes(error.stage)?error.stage:'unknown';
   }finally{clearTimeout(deadline);controller.abort();globalThis.fetch=original;}
   return report;
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   const mode=process.argv.slice(2).join(' ');
   if(!['--run-live','--run-workflow'].includes(mode)){
-    console.error('No requests made. Explicit opt-in: --run-live (4 route requests) OR --run-workflow (3 Pollinations passes, NO live search)');process.exitCode=2;
+    console.error('No requests made. Explicit opt-in: --run-live (4 route requests) OR --run-workflow (2 Pollinations passes, NO live search)');process.exitCode=2;
   }else{
     const workflow=mode==='--run-workflow',report=await (workflow?probePollinationsWorkflow():probeLegacyRoutes());fs.mkdirSync('.cache',{recursive:true});
     const name=workflow?'pollinations-workflow-report':'legacy-route-report';

@@ -584,7 +584,7 @@ export async function generateAiBrowser(options) {
       contextLimit:getPublicDemo(options.model)?.maxPromptChars || 48000,
     });
     throwIfUserAborted(controller.signal);
-    options.onStatus?.({ stage: 'format', message: 'Ответ получен. Обрабатываем результат…', trail:result.workflow.trail, elapsedMs:result.workflow.elapsedMs });
+    options.onStatus?.({ stage: 'format', message: result.sourcesOnly ? 'Получены только поисковые выдержки. Готовим их к показу…' : 'Ответ получен. Обрабатываем результат…', trail:result.workflow.trail, elapsedMs:result.workflow.elapsedMs });
     return result;
   } catch(error) {
     if (controller.signal.aborted && controller.signal.reason?.name === 'TimeoutError') throw new Error('Общее время ожидания истекло (8 минут). Запрос не повторяется; уменьшите глубину или выберите другую модель.');
