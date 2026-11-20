@@ -34,6 +34,7 @@ try {
       if(scenario==='initial503'||scenario==='answer503'&&!plan) return route.fulfill({status:503,json:{error:'PRIVATE_ERROR_SENTINEL'},headers:{'access-control-allow-origin':'*'}});
       if(scenario==='network') return route.abort('failed');
       if(scenario==='ai402') return route.fulfill({status:402,json:{error:'PRIVATE_PAYMENT_CHALLENGE'},headers:{'access-control-allow-origin':'*','retry-after':'45'}});
+      if(scenario==='nativeTools') return route.fulfill({contentType:'text/event-stream',body:'data: {"choices":[{"delta":{"content":"PRIVATE_TOOL_CONTENT","tool_calls":[{"function":{"arguments":"PRIVATE_TOOL_ARGS"}}]},"finish_reason":"tool_calls"}]}\n\n',headers:{'access-control-allow-origin':'*'}});
       if(scenario==='partial') return route.fulfill({contentType:'text/event-stream',body:'data: {"choices":[{"delta":{"content":"НЕПОЛНЫЙ_ОТВЕТ_НЕ_ПОКАЗЫВАТЬ"}}]}\n\n',headers:{'access-control-allow-origin':'*'}});
       const content=scenario==='badAction'?'{"search":true,"queries":[]}':plan&&scenario!=='math'?JSON.stringify({search:true,queries:['Солнечная система число планет']}):scenario==='math'?(review?'Исправленный ответ.\n\n2+2=4':'ЧЕРНОВИК_НЕ_ПОКАЗЫВАТЬ.\n\n2+2=5'):'По выдержке: восемь планет [1]. [Неподтверждённое](https://invented.example/fake).';
       return route.fulfill({contentType:'text/event-stream',body:`data: ${JSON.stringify({choices:[{delta:{reasoning:'PRIVATE_THOUGHT_SENTINEL'}}]})}\n\ndata: ${JSON.stringify({choices:[{delta:{content},finish_reason:'stop'}]})}\n\ndata: [DONE]\n\n`,headers:{'access-control-allow-origin':'*'}});
@@ -123,6 +124,9 @@ try {
   scenario='partial';const partialAt=requests.length;await submit('Проверь пример при обрыве потока');
   await page.getByRole('alert').filter({hasText:'Неполный ответ не принят'}).waitFor();
   ok(requests.length-partialAt===1 && !(await page.locator('body').innerText()).includes('НЕПОЛНЫЙ_ОТВЕТ_НЕ_ПОКАЗЫВАТЬ'),'partial SSE cannot become a final answer or a search action');
+  scenario='nativeTools';const nativeToolsAt=requests.length;await submit('Найди источник при неверном формате инструмента');
+  await page.getByRole('alert').filter({hasText:'собственный инструмент вместо текста'}).waitFor();
+  ok(requests.length-nativeToolsAt===1 && !(await page.locator('body').innerText()).includes('PRIVATE_TOOL') && await page.locator('.simple-answer').count()===0,'native tool finish is a safe named refusal, never a search or a partial answer');
   scenario='badAction';const badActionAt=requests.length;await submit('Найди источник с повреждённой командой');
   await page.getByRole('alert').filter({hasText:'Команда поиска не принята'}).waitFor();
   ok(requests.length-badActionAt===1 && await page.locator('.simple-answer').count()===0,'malformed action is neither displayed as an answer nor sent to search or retried');

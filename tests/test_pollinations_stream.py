@@ -47,6 +47,8 @@ class PollinationsTests(unittest.TestCase):
             data = json.loads(request.content)
             self.assertIs(data['stream'], True)
             self.assertEqual(data['model'], 'openai-fast')
+            self.assertEqual(data['tool_choice'], 'none')
+            self.assertNotIn('tools', data)
             self.assertEqual(data['messages'][0]['content'], 'Правила учителя')
             return httpx.Response(200, headers={'content-type': 'text/event-stream'}, stream=body)
 
@@ -78,6 +80,21 @@ class PollinationsTests(unittest.TestCase):
                 poll.call_pollinations('Учитель', TURNS)
             self.assertEqual(caught.exception.code, 'pollinations-' + code)
             self.assertNotIn('PRIVATE', str(caught.exception))
+
+    def test_native_tool_finish_is_not_a_text_answer_or_an_executable_search(self):
+        for reason in ('tool_calls', 'function_call'):
+            calls = []
+            def handler(request):
+                calls.append(request)
+                return httpx.Response(200, headers={'content-type': 'text/event-stream'},
+                                      text=delta('PRIVATE_CONTENT', reason, tool_calls=[{'function': {'arguments': 'PRIVATE_TOOL'}}]))
+            with self.subTest(reason=reason), client_patch(handler), self.assertRaises(poll.PollinationsError) as caught:
+                poll.call_pollinations('Учитель', TURNS)
+            self.assertEqual(caught.exception.code, 'pollinations-protocol')
+            self.assertEqual(caught.exception.diagnostic, 'finish-' + reason)
+            self.assertIn('собственный инструмент', str(caught.exception))
+            self.assertNotIn('PRIVATE', str(caught.exception))
+            self.assertEqual(len(calls), 1)
 
     def test_http_errors_preserve_status_and_bounded_retry_after_but_never_retry_or_pay(self):
         for status, code in [(401, 'auth'), (402, 'quota'), (429, 'quota'), (503, 'unavailable')]:

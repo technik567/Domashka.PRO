@@ -30,7 +30,10 @@ export class PollinationsError extends Error {
       image: 'Этот маршрут Pollinations не принимает само фото. Выберите Vision-модель или режим OCR.',
       context: 'Задание и история превышают безопасный объём этого подключения. Сократите задание или начните новый диалог.',
     };
-    super(`${messages[code] || messages.protocol}${http ? ` HTTP ${http}.` : ''}${wait ? ` Сервис просит подождать не менее ${wait} с.` : ''} Автоматического повтора и оплаты нет.`);
+    const message = code === 'protocol' && ['finish-tool_calls','finish-function_call'].includes(diagnostic)
+      ? 'Pollinations запросил собственный инструмент вместо текста. Такой вызов не выполняется; поиск приложения запускается только по проверенной текстовой команде.'
+      : messages[code] || messages.protocol;
+    super(`${message}${http ? ` HTTP ${http}.` : ''}${wait ? ` Сервис просит подождать не менее ${wait} с.` : ''} Автоматического повтора и оплаты нет.`);
     this.name = 'PollinationsError'; this.code = `pollinations-${code}`; this.status = http; this.retryAfterSeconds = wait;
     this.diagnostic = DIAGNOSTICS.has(diagnostic) ? diagnostic : '';
   }
@@ -144,7 +147,9 @@ export async function callPollinationsStream(systemPrompt, messages, externalSig
         method:'POST', credentials:'omit', referrerPolicy:'no-referrer', redirect:'error',
         headers:{'Content-Type':'application/json', Accept:'text/event-stream'},
         body:JSON.stringify({model:POLLINATIONS_MODEL, messages:[{role:'system',content:String(systemPrompt || '')}, ...turns],
-          stream:true, temperature:0.35}),
+          // Native calls are not the app's bounded text search action. The
+          // legacy origin forwards this standard option to its model backend.
+          stream:true, temperature:0.35, tool_choice:'none'}),
       }, signal);
     } catch { throw new PollinationsError('network'); }
     if (!response.ok) throw statusError(response);

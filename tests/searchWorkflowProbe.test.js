@@ -15,6 +15,8 @@ describe('bounded opt-in search workflow regression probe',()=>{
     expect(globalThis.fetch).toBe(original);expect(report).toMatchObject({status:'verified',searchAttempts:1,sourcesOnly:false,hasSearchFooter:true,workflow:{calls:2,searches:1,verified:0},sources:{hosts:['science.nasa.gov']}});
     expect(transport).toHaveBeenCalledTimes(3);expect(report.requests.map(row=>row.stage)).toEqual(['answer-or-search','search-1','answer']);
     for(const [url,init]of transport.mock.calls){expect(url).not.toMatch(/hf\.space|supabase|auth|gen\.pollinations/);expect(init.credentials).toBe('omit');expect(init.redirect).toBe('error');expect(init.headers.has('Authorization')).toBe(false);}
+    expect(JSON.parse(transport.mock.calls[0][1].body)).toMatchObject({tool_choice:'none',stream:true});
+    expect(JSON.parse(transport.mock.calls[2][1].body)).toMatchObject({tool_choice:'none',stream:true});
     const [,search]=transport.mock.calls[1];expect(search.headers.get('X-Tavily-Access-Mode')).toBe('keyless');expect(JSON.parse(search.body)).toMatchObject({query:'NASA solar system planets',include_answer:false,include_raw_content:false,safe_search:true});
     expect(JSON.stringify(report)).not.toMatch(/NASA solar system planets|eight planets|В Солнечной системе восемь/);
   });

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {runAnswerWorkflow} from '../src/standalone/workflow.js';
-import {callPollinationsStream} from '../src/standalone/pollinationsGateway.js';
+import {callPollinationsStream,PollinationsError} from '../src/standalone/pollinationsGateway.js';
 import {runWebSearch} from '../src/standalone/webSearch.js';
 import {searchActionPrompt,parseSearchAction} from '../src/standalone/searchActions.js';
 const QUESTION='Найди официальный источник NASA о количестве планет в Солнечной системе. Используй веб-поиск, ответь одним коротким предложением со ссылкой на найденный источник.';
@@ -51,7 +51,8 @@ export async function probeSearchWorkflow(fetchImpl=globalThis.fetch) {
     if(model?++modelCalls>2:++searchCalls>1)throw Object.assign(new Error('Probe budget exceeded.'),{code:'probe-budget'});
     if(search&&headers.get('x-tavily-access-mode')!=='keyless')throw Object.assign(new Error('Keyless only.'),{code:'probe-keyless'});
     headers.set('Origin','https://gentle-fog-7c3b.jr-polyakoff.workers.dev');
-    const record={stage:model?(modelCalls===1?'answer-or-search':'answer'):'search-1',status:0,headersReceived:false};
+    const record={stage:model?(modelCalls===1?'answer-or-search':'answer'):'search-1',status:0,headersReceived:false,
+      ...(model?{nativeToolsDisabled:JSON.parse(init.body).tool_choice==='none'}:{})};
     report.requests.push(record);const started=Date.now();
     const response=await fetchImpl(url,{...init,headers});
     Object.assign(record,{status:response.status,headersReceived:true,headersElapsedMs:Date.now()-started,contentType:(response.headers.get('content-type')||'').split(';')[0]});
@@ -60,7 +61,10 @@ export async function probeSearchWorkflow(fetchImpl=globalThis.fetch) {
   try{
     const output=await runAnswerWorkflow({options:{provider:'builtin',model:'pollinations',webSearch:'auto',reasoning:'off',allowLocalFallback:false,signal:controller.signal},
       messages:[{role:'user',content:QUESTION}],systemPrompt:SYSTEM,
-      request:args=>callPollinationsStream(args.systemPrompt,args.messages,args.signal,undefined,args.onStatus),
+      request:async args=>{
+        try{return await callPollinationsStream(args.systemPrompt,args.messages,args.signal,undefined,args.onStatus);}
+        catch(error){if(error instanceof PollinationsError&&error.diagnostic)report.adapterDiagnostic=error.diagnostic;throw error;}
+      },
       search:async(query,args)=>{report.searchAttempts++;const data=await runWebSearch(query,args);report.sources={count:data.results.length,hosts:data.results.map(row=>new URL(row.url).hostname)};return data;},contextLimit:48000});
     report.workflow={calls:output.workflow.calls,searches:output.workflow.searches,verified:output.workflow.verified,elapsedMs:output.workflow.elapsedMs};
     report.answerLength=output.text.length;report.sourcesOnly=output.sourcesOnly===true;

@@ -13,7 +13,7 @@ describe('Pollinations documented free queue, no payment or refusal retries',()=
     fetch.mockResolvedValue(stream(delta('Ответ: 4.')+delta('','stop')+'data: [DONE]\n\n'));
     expect((await callPollinationsStream('Учитель',turns)).text).toBe('Ответ: 4.');
     const [url,init]=fetch.mock.calls[0],body=JSON.parse(init.body);
-    expect(url).toBe('https://text.pollinations.ai/openai');expect(body).toMatchObject({model:POLLINATIONS_MODEL,stream:true});
+    expect(url).toBe('https://text.pollinations.ai/openai');expect(body).toMatchObject({model:POLLINATIONS_MODEL,stream:true,tool_choice:'none'});expect(body).not.toHaveProperty('tools');
     expect(init.credentials).toBe('omit');expect(init.redirect).toBe('error');
     expect(Object.keys(init.headers).some(k=>/authorization|payment|forwarded|token|cookie/i.test(k))).toBe(false);
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -112,6 +112,13 @@ describe('fixed response-shape diagnostics, never provider bodies',()=>{
     fetch.mockResolvedValue(stream(data(payload)));
     try {await callPollinationsStream('Учитель',turns);throw new Error('expected refusal');}
     catch(error){expect(error).toMatchObject({code:'pollinations-protocol',diagnostic});expect(error.message+JSON.stringify(error)).not.toContain('PRIVATE_SENTINEL');}
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it.each(['tool_calls','function_call'])('refuses native %s without executing it, accepting partial text or exposing arguments',async(reason)=>{
+    fetch.mockResolvedValue(stream(data({choices:[{delta:{content:'PRIVATE_CONTENT',tool_calls:[{function:{name:'PRIVATE_NAME',arguments:'PRIVATE_ARGS'}}]},finish_reason:reason}]})));
+    const error=await callPollinationsStream('Учитель',turns).catch(error=>error);
+    expect(error).toMatchObject({code:'pollinations-protocol',diagnostic:`finish-${reason}`});
+    expect(error.message).toContain('собственный инструмент');expect(error.message+JSON.stringify(error)).not.toContain('PRIVATE');
     expect(fetch).toHaveBeenCalledTimes(1);
   });
   it('rejects caller-supplied diagnostic text outside the allowlist',()=>{
