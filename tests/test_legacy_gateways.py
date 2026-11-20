@@ -1,6 +1,10 @@
 import asyncio
+import base64
+import io
 import json
 import unittest
+
+from PIL import Image
 from unittest.mock import patch
 
 import httpx
@@ -62,6 +66,29 @@ class LegacyGatewayTests(unittest.TestCase):
             self.assertEqual(len(calls), 3)
             self.assertFalse(client.call_args.kwargs['follow_redirects'])
             self.assertFalse(client.call_args.kwargs['trust_env'])
+
+    def test_text_only_qwen25_upload_is_a_real_decodable_white_png(self):
+        image = base64.b64decode(legacy.BLANK_PNG.split(',')[1])
+        with Image.open(io.BytesIO(image)) as picture:
+            picture.load()  # actually inflate/decode; merely reading IHDR missed the old defect
+            self.assertEqual(picture.size, (16, 16))
+            self.assertEqual(picture.mode, 'RGB')
+            self.assertEqual(picture.getextrema(), ((255, 255),) * 3)
+        calls = []
+
+        def handler(request):
+            calls.append(request)
+            if request.url.path.endswith('/upload'):
+                self.assertIn(image, request.content)
+                return httpx.Response(200, json=['/tmp/white.png'])
+            if request.method == 'POST':
+                self.assertEqual(json.loads(request.content)['data'][0]['path'], '/tmp/white.png')
+                return httpx.Response(200, json={'event_id': 'fixture'})
+            return httpx.Response(200, headers={'content-type': 'text/event-stream'}, text=event(answer('qwen25')))
+
+        with client_patch(handler):
+            self.assertEqual(legacy.call_qwen('qwen25', 'Учебный вопрос'), 'Короткая подсказка')
+        self.assertEqual(len(calls), 3)
 
     def test_http_status_is_preserved_without_reading_an_error_body_or_repeating(self):
         for status, code in [(401, 'auth'), (429, 'quota'), (503, 'unavailable')]:
@@ -155,20 +182,21 @@ class LegacyGatewayTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
     def test_pollinations_status_protocol_and_timeout_are_safe(self):
-        cases = [(503, 'PRIVATE_SENTINEL', False, 'unavailable'), (200, 'PRIVATE_SENTINEL', False, 'protocol'), (200, '', True, 'timeout')]
+        cases = [(503, 'PRIVATE_SENTINEL', False, 'unavailable'), (200, 'data: PRIVATE_SENTINEL\n\n', False, 'protocol'), (200, '', True, 'timeout')]
         for status, text, hang, code in cases:
-            with self.subTest(code=code), client_patch(lambda request: httpx.Response(status, stream=Stream(text, hang))), self.assertRaises(legacy.PollinationsError) as caught:
+            with self.subTest(code=code), client_patch(lambda request: httpx.Response(status, headers={'content-type': 'text/event-stream'}, stream=Stream(text, hang))), self.assertRaises(legacy.PollinationsError) as caught:
                 legacy.call_pollinations('Teacher', [{'role': 'user', 'content': 'Question'}], timeout=.02)
             self.assertEqual(caught.exception.code, 'pollinations-' + code)
             self.assertNotIn('PRIVATE_SENTINEL', str(caught.exception))
 
     def test_auto_does_not_restart_after_the_overall_python_budget(self):
         with patch.object(ai_service.time, 'monotonic', side_effect=[0, 0, 301]), \
-             patch.object(ai_service, '_call_qwen35_omni_server', side_effect=demos.PublicDemoError('timeout')), \
-             patch.object(legacy, 'call_pollinations') as pollinations, patch.object(ai_service, '_call_qwen_vl_server') as other:
+             patch.object(legacy, 'call_pollinations', side_effect=legacy.PollinationsError('timeout')) as pollinations, \
+             patch.object(ai_service, '_call_qwen35_omni_server') as qwen, patch.object(ai_service, '_call_qwen_vl_server') as other:
             with self.assertRaises(RuntimeError):
                 ai_service.generate_ai_response('builtin', '', 'auto', 'Учитель', [{'role': 'user', 'content': 'Вопрос'}])
-            pollinations.assert_not_called()
+            pollinations.assert_called_once()
+            qwen.assert_not_called()
             other.assert_not_called()
 
 

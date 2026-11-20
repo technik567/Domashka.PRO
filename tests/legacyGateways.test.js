@@ -1,4 +1,5 @@
 import {describe,it,expect,vi} from 'vitest';
+import config from '../shared/legacy-gateways.json';
 import {callQwen35Gateway,callQwen25Gateway,callPollinationsGateway,qwen35Answer,LEGACY_QWEN_TIMEOUT_MS,POLLINATIONS_TIMEOUT_MS} from '../src/standalone/legacyGateways';
 const turns=[{role:'user',content:'Покажи один учебный шаг.'}];
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json'}});
@@ -13,6 +14,14 @@ describe('legacy Qwen adapters use bounded streaming, not a 17–19 second cutof
     setup(kind);const r=await call('Только учебная подсказка',turns);expect(r.text).toBe('Короткая подсказка.');
     const post=fetch.mock.calls.find(([url,init])=>url.includes('/call/')&&init.method==='POST');expect(JSON.stringify(JSON.parse(post[1].body).data)).toContain('Только учебная подсказка');
     for(const [,init]of fetch.mock.calls){expect(init.credentials).toBe('omit');expect(init.redirect).toBe('error');expect(init.referrerPolicy).toBe('no-referrer');}
+  });
+  it('actually uploads the shared valid PNG for text-only Qwen 2.5, without requiring a user photo',async()=>{
+    setup('qwen25');await callQwen25Gateway('Учитель',turns);
+    const upload=fetch.mock.calls.find(([url])=>url.endsWith('/upload'))[1].body.get('files');
+    const bytes=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(new Uint8Array(reader.result));reader.onerror=reject;reader.readAsArrayBuffer(upload);});
+    expect(Buffer.from(bytes).toString('base64')).toBe(config.neutralImageDataUrl.split(',')[1]);
+    const sent=JSON.parse(fetch.mock.calls.find(([url,init])=>url.includes('/call/')&&init.method==='POST')[1].body);
+    expect(sent.data[1]).toContain('Игнорируй пустой белый фон');
   });
   it('still waits after the old 19-second limit instead of killing a valid queue',async()=>{
     vi.useFakeTimers();setup('qwen35',()=>new Promise(resolve=>setTimeout(()=>resolve(stream(event(outputs.qwen35))),25000)));

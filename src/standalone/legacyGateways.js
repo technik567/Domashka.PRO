@@ -1,11 +1,14 @@
 // The original keyless routes use the same bounded Gradio transport as newer
 // demos. No new endpoints, credentials, paid fallback or quota bypass.
-import {linkAbortSignals, throwIfAborted, fetchAbortable, fetchWithTimeout} from './network';
+import {linkAbortSignals, throwIfAborted, fetchAbortable} from './network';
 import {readPublicDemoJson, readPublicDemoStream, PublicDemoError, publicDemoError} from './publicDemos';
+import config from '../../shared/legacy-gateways.json';
+export {callPollinationsStream as callPollinationsGateway, POLLINATIONS_TIMEOUT_MS} from './pollinationsGateway';
 
-export const LEGACY_QWEN_TIMEOUT_MS = 300_000;
-export const POLLINATIONS_TIMEOUT_MS = 45_000;
-const BLANK_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFUlEQVR4nGP8//8/AzWAiSTVIxx1AA5xAx/73812AAAAAElFTkSuQmCC';
+export const LEGACY_QWEN_TIMEOUT_MS = config.qwenTimeoutMs;
+// Qwen 2.5's public endpoint requires an actual, decodable image even for text.
+// Keep the same checksummed PNG for JS/Python; regression tests inflate IDAT.
+const BLANK_PNG = config.neutralImageDataUrl;
 const HOSTS = {qwen35:'https://qwen-qwen3-5-omni-offline-demo.hf.space',qwen25:'https://developer0hye-qwen2-5-vl-7b-instruct.hf.space'};
 
 function photo(dataUri) {
@@ -73,37 +76,3 @@ async function gradio(kind, systemPrompt, messages, externalSignal, imageB64, on
 }
 export const callQwen35Gateway = (prompt,messages,signal,image,onStatus)=>gradio('qwen35',prompt,messages,signal,image,onStatus);
 export const callQwen25Gateway = (prompt,messages,signal,image,onStatus)=>gradio('qwen25',prompt,messages,signal,image,onStatus);
-
-function pollinationsError(code,status=0) {
-  const messages = {
-    network:'Браузер не получил ответ от Pollinations. По этой ошибке нельзя отличить CORS от обрыва сети или недоступности сервиса.',
-    timeout:'Pollinations не завершил ответ за 45 секунд. Ожидание остановлено; сервер мог уже принять запрос.',
-    auth:'Pollinations не разрешил этот запрос. Доступ анонимного маршрута зависит от правил площадки.',
-    quota:'Pollinations отказал из-за лимита или условий бесплатного доступа. Перехода на платный API нет.',
-    unavailable:'Pollinations временно недоступен или перегружен.',
-    protocol:'Pollinations вернул неподдерживаемый или пустой ответ.',
-  };
-  const error = new Error(`${messages[code]}${status?` HTTP ${status}.`:''} Автоматического повтора нет.`);
-  return Object.assign(error,{code:`pollinations-${code}`,status});
-}
-export async function callPollinationsGateway(systemPrompt,messages,signal) {
-  let response;
-  try {
-    response = await fetchWithTimeout('https://text.pollinations.ai/openai',{
-      method:'POST',credentials:'omit',referrerPolicy:'no-referrer',redirect:'error',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:'openai',messages:[{role:'system',content:systemPrompt},...messages.slice(-8)],temperature:0.35,seed:Math.floor(Math.random()*100000)}),
-    },POLLINATIONS_TIMEOUT_MS,signal,{readErrorBody:false});
-  } catch (error) {
-    throwIfAborted(signal);
-    throw pollinationsError(error?.name==='TimeoutError'?'timeout':'network');
-  }
-  if (!response.ok) {
-    const status=response.status;
-    throw pollinationsError([401,403].includes(status)?'auth':[402,429].includes(status)?'quota':status>=500?'unavailable':'protocol',status);
-  }
-  let data;
-  try { data=await response.json(); } catch { throw pollinationsError('protocol'); }
-  const text=data?.choices?.[0]?.message?.content;
-  if (data?.error || typeof text!=='string' || !text.trim()) throw pollinationsError('protocol');
-  return {text,used:'Pollinations (облачный маршрутизатор)'};
-}

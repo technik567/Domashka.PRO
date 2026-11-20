@@ -702,15 +702,18 @@ def _call_builtin_free(
             image_b64=image_b64, timeout=remaining(),
         )
 
-    gateways = [("qwen-3.5", "Qwen 3.5 Omni", qwen35),
-                ("pollinations", "Pollinations", pollinations),
-                ("qwen-2.5-vl", "Qwen 2.5 VL", qwen25)]
+    gateways = {"qwen-3.5": ("Qwen 3.5 Omni", qwen35),
+                "pollinations": ("Pollinations · openai-fast", pollinations),
+                "qwen-2.5-vl": ("Qwen 2.5 VL", qwen25)}
+    # Match the browser: text first uses the provider's normal free streaming
+    # queue. Other original routes are attempted only after a failure, not in
+    # parallel, and never beyond the total deadline. No photo to text-only API.
+    order = legacy_gateways.AUTO_IMAGE_ROUTES if image_b64 else legacy_gateways.AUTO_TEXT_ROUTES
     errors = []
-    for model_id, label, call in gateways:
+    for model_id in (order if selected == "auto" else [selected]):
         if image_b64 and model_id == "pollinations":
-            continue
-        if selected != "auto" and model_id != selected:
-            continue
+            raise ValueError("Pollinations не принимает само фото. Выберите Vision-модель или явно включите OCR.")
+        label, call = gateways[model_id]
         try:
             text = call()
             if not text or not text.strip():

@@ -1,0 +1,8 @@
+{
+  "qwenTimeoutMs": 300000,
+  "pollinationsTimeoutMs": 120000,
+  "pollinationsModel": "openai-fast",
+  "autoTextRoutes": ["pollinations", "qwen-3.5", "qwen-2.5-vl"],
+  "autoImageRoutes": ["qwen-3.5", "qwen-2.5-vl"],
+  "neutralImageDataUrl": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFElEQVR42mP4TyJgGNUwqmH4agAAr639H23ooMoAAAAASUVORK5CYII="
+}

@@ -32,7 +32,8 @@ import { CHEAT_SHEETS } from '../data/referenceData';
 import { BUILTIN_MODELS, DEFAULT_OPENROUTER_FREE_MODELS, DEFAULT_GEMINI_MODELS } from './modelCatalog';
 import { isTutorModeEnabled, subscribeParentalControl } from './parentalControl';
 import { buildTutorSystemPrompt, offlineTutorReply } from './tutorPolicy';
-import { fetchWithTimeout, abortableDelay } from './network';
+import { fetchWithTimeout, linkAbortSignals } from './network';
+import legacyConfig from '../../shared/legacy-gateways.json';
 export { DEFAULT_OPENROUTER_FREE_MODELS, DEFAULT_GEMINI_MODELS } from './modelCatalog';
 
 export const SUBJECT_NAMES = {
@@ -362,8 +363,9 @@ async function callCustomLocalBrowser(baseUrl, apiKey, model, systemPrompt, mess
 
 /**
  * Built-in Zero-Key Multi-Gateway Browser Engine:
- * Only explicit Auto may race the original routes. Each has a real deadline;
- * no newer demos, paid endpoints or authentication/quota bypass are added.
+ * Only explicit Auto may try the original routes in sequence. Text starts at
+ * Pollinations' free streaming queue; photos stay on image-capable endpoints.
+ * One total deadline, no concurrent quota spend or new/paid fallback routes.
  */
 async function callBuiltinFreeBrowser(
   systemPrompt, messages, onStatus, fallbackMode = 'solve', fallbackMeta = {}, signal,
@@ -392,37 +394,35 @@ async function callBuiltinFreeBrowser(
   };
   onStatus?.({ stage: 'thinking', message: fallbackMode === 'tutor' ? 'Репетитор готовит одну подсказку...' : 'Выбранная нейросеть разбирает задание...' });
   if (selected !== 'auto') {
-    onStatus?.({ stage: 'cloud', message: selected === 'pollinations' ? 'Pollinations: ожидаем ответ, до 45 секунд…' : 'Qwen: ожидаем очередь и ответ, до 5 минут. Можно остановить ожидание.' });
+    onStatus?.({ stage: 'cloud', message: selected === 'pollinations' ? 'Pollinations: бесплатная очередь и ответ, до 2 минут…' : 'Qwen: ожидаем очередь и ответ, до 5 минут. Можно остановить ожидание.' });
     try { const result = await gateways[selected](systemPrompt, messages, signal, imageB64, onStatus); return { ...result, text: normalizeLatex(result.text) }; }
     catch (error) { throw modelError(error); }
   }
 
-  const raceController = new AbortController();
-  const onParentAbort = () => raceController.abort();
-  signal?.addEventListener('abort', onParentAbort, { once: true });
-  const delayed = async (fn, delay) => {
-    await abortableDelay(delay, raceController.signal);
-    return fn(systemPrompt, messages, raceController.signal, imageB64);
-  };
-  let failureSummary = '';
-  onStatus?.({ stage: 'cloud', message: 'Авто: ожидаем исходные бесплатные маршруты, до 5 минут. Можно остановить ожидание.' });
+  const budget = linkAbortSignals(signal, LEGACY_QWEN_TIMEOUT_MS);
+  const order = imageB64 ? legacyConfig.autoImageRoutes : legacyConfig.autoTextRoutes;
+  const failures = [];
   try {
-    const tasks = [delayed(callQwen35OmniGateway, 0), delayed(callQwenAwsGateway, imageB64 ? 1200 : 2500)];
-    if (!imageB64) tasks.push(delayed(callPollinationsGateway, 1200));
-    const result = await Promise.any(tasks);
-    return { ...result, text: normalizeLatex(result.text) };
-  } catch (error) {
-    throwIfUserAborted(signal);
-    const labels = ['Qwen 3.5', 'Qwen 2.5 VL', 'Pollinations'];
-    failureSummary = (error?.errors || []).slice(0,3).map((cause,i) => {
-      // These adapters already redact provider bodies. Preserve route/status
-      // evidence rather than guessing that every failure is the phone's CORS.
-      return `${labels[i]}: ${cause?.message || 'ответ не получен'}`;
-    }).join(' ');
-  } finally {
-    raceController.abort();
-    signal?.removeEventListener('abort', onParentAbort);
-  }
+    for (const id of order) {
+      throwIfUserAborted(signal);
+      if (budget.signal.aborted) break;
+      const label = BUILTIN_MODELS.find(m => m.id === id).name;
+      onStatus?.({stage:'cloud', message:`Авто: ${label}. Подключения проверяются по очереди, общий предел — 5 минут.`});
+      try {
+        const result = await gateways[id](systemPrompt, messages, budget.signal, imageB64, onStatus);
+        throwIfUserAborted(signal);
+        if (budget.signal.aborted) break;
+        return {...result, text:normalizeLatex(result.text)};
+      } catch (error) {
+        throwIfUserAborted(signal);
+        // Only already-redacted adapter messages; no raw bodies/keys in UI.
+        if (budget.signal.aborted) break;
+        failures.push(`${label}: ${error?.message || 'ответ не получен'}`);
+      }
+    }
+    if (budget.signal.aborted) failures.push('Истекло общее ожидание Авто (5 минут). Запрос мог быть принят сервисом.');
+  } finally { budget.cleanup(); }
+  const failureSummary = failures.join(' ');
   if (imageB64) throw new Error('Vision-маршруты не вернули ответ. Фото могло быть принято сервисом; оно не подменялось OCR. ' + failureSummary);
   if (!allowLocalFallback) throw new Error('Авто не получило облачный ответ. Локальный ответ не подменяет этот этап. ' + failureSummary);
   if (fallbackMode === 'tutor') return offlineTutorReply(messages);
