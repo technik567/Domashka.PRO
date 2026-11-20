@@ -12,5 +12,8 @@ __pycache__/
 /test-results/
 /playwright-report/
 /.cache/
+/.wrangler/
+.dev.vars
+.dev.vars.*
 
 # Both Domashka_PRO_Cloudflare.zip and Domashka_PRO_Portable.zip are tracked for the requested direct GitHub download.

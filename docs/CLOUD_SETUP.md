@@ -82,7 +82,7 @@ supabase functions deploy web-search
 
 ## 5. Собрать и опубликовать только статические файлы
 
-Нужны Node.js 22+ и Python 3. Переменные ниже — **только публичные**. Используйте свои значения, не буквальные примеры:
+Нужны Node.js 22.12+ и Python 3.11+. Переменные ниже — **только публичные**. Используйте свои значения, не буквальные примеры:
 
 ```sh
 npm ci
@@ -154,4 +154,6 @@ SQL-прогон исполняет настоящие миграции на Pos
 
 Новые проекты применяют все восемь SQL-файлов в порядке имён. В уже подготовленном проекте миграции повторно не выполняют: проверяйте историю. Поиск использует отдельную `web-search` функцию и ту же точную `DOMASHKA_ALLOWED_ORIGINS`. В исходнике 4.4 официальный keyless работает без ключа; серверный owner-only `TAVILY_API_KEY` и личный ключ только в памяти вкладки необязательны. Для уже существующего проекта нужна новая версия функции, **не повторение SQL**: [контракт и квоты](AI_FEATURES.md#поиск-tavily).
 
-Для первого Direct Upload можно собрать с `DOMASHKA_SITE_URL=auto` и `python3 scripts/prepare_cloud.py --zip Domashka_PRO_Cloudflare.zip`. Origin определяется из реального HTTPS-адреса, не из HTML-файла. Auth redirects/Origins/CAPTCHA это не настраивает: после deployment задайте точный адрес сервера по [CLOUD_LAUNCH.md](CLOUD_LAUNCH.md). Это описание для нового проекта. **Существующий Worker не пересоздавать.** Автообновление через Git Builds в этой поставке не настраивалось; оно требует отдельного решения владельца.
+Для первого Direct Upload можно собрать с `DOMASHKA_SITE_URL=auto` и `python3 scripts/prepare_cloud.py --zip Domashka_PRO_Cloudflare.zip`. Origin определяется из реального HTTPS-адреса, не из HTML-файла. Auth redirects/Origins/CAPTCHA это не настраивает: после deployment задайте точный адрес сервера. Этот раздел описывает **новый проект**, не повторную установку существующего.
+
+**Существующий Worker `gentle-fog-7c3b` не пересоздавать.** После 4.4 владелец сообщил о подключении GitHub; для этого конкретного сайта подготовлены `wrangler.json`, `cloudflare.public.json` с уже используемыми публичными значениями, `build:worker` → `.cache/worker-site` и `deploy:worker` с проверкой `main`. Панель: build `npm ci && npm run build:worker`, deploy `npm run deploy:worker`, production branch `main`, Preview Builds выключены. Это не перенос/сброс Supabase и не команда для произвольного другого проекта. Успешное развёртывание ещё нужно подтвердить после отдельного одобренного merge. [Полная инструкция и актуальный статус](CLOUD_LAUNCH.md).
