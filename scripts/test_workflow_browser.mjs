@@ -1,4 +1,4 @@
-// Built 4.4 HTML + strict CSP + deliberately mocked AI/search transports.
+// Built 4.5 HTML + strict CSP + deliberately mocked AI/search transports.
 // No live inference, Tavily quota, physical phone or real credentials here.
 import fs from 'node:fs';
 import http from 'node:http';
@@ -31,13 +31,15 @@ try {
       const plan=data.messages[0].content.includes('Ты выбираешь, нужен ли веб-поиск');
       const review=data.messages[0].content.includes('ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА');
       requests.push({kind:plan?'plan':review?'review':'answer',body:data});
+      if(scenario==='planner503') return route.fulfill({status:503,json:{error:'PRIVATE_ERROR_SENTINEL'},headers:{'access-control-allow-origin':'*'}});
+      if(scenario==='network') return route.abort('failed');
       const content=plan?JSON.stringify(scenario==='math'?{search:false,queries:[]}:{search:true,queries:['Солнечная система число планет']}):scenario==='math'?(review?'Исправленный ответ.\n\n2+2=4':'ЧЕРНОВИК_НЕ_ПОКАЗЫВАТЬ.\n\n2+2=5'):'По выдержке: восемь планет [1]. [Неподтверждённое](https://invented.example/fake).';
       return route.fulfill({json:{choices:[{message:{content}}]},headers:{'access-control-allow-origin':'*'}});
     }
     if(url.hostname==='api.tavily.com'){
       requests.push({kind:'search',body:data,keyless:req.headers()['x-tavily-access-mode']==='keyless',personalKey:req.headers().authorization===`Bearer ${key}`});
       if(holdSearch){holdSearch=false;enteredSearch();await new Promise(resolve=>{releaseSearch=resolve;});}
-      try{return await route.fulfill(scenario==='quota'?{status:429,json:{error:'upstream-details-not-for-UI'}}:{json:{results:[source]},headers:{'access-control-allow-origin':'*'}});}catch{/* an explicit Stop can close the routed request */}
+      try{return await route.fulfill(scenario==='quota'?{status:429,json:{error:'upstream-details-not-for-UI'}}:scenario==='search503'?{status:503,json:{error:'PRIVATE_ERROR_SENTINEL'}}:{json:{results:[source]},headers:{'access-control-allow-origin':'*'}});}catch{/* an explicit Stop can close the routed request */}
       return;
     }
     unexpected.push(req.url());await route.abort('blockedbyclient');
@@ -93,8 +95,17 @@ try {
   await page.getByRole('button',{name:'Новый чат',exact:true}).click();gateSearch();const cancelAt=requests.length;
   await submit('Поиск для отмены');await searchEntered;await page.getByRole('button',{name:'Остановить ответ'}).click();releaseSearch();await stableFrame();
   ok(await page.getByRole('textbox',{name:'Твоё сообщение'}).inputValue()==='Поиск для отмены' && requests.slice(cancelAt).map(r=>r.kind).join(',')==='plan,search','Stop retains the original draft and prevents the answer/review stages after a pending search');
-  scenario='quota';const quotaAt=requests.length;await submit('Найди источники ещё раз');await page.getByRole('alert').filter({hasText:'Лимит поиска исчерпан'}).waitFor();
+  scenario='quota';const quotaAt=requests.length;await submit('Найди источники ещё раз');await page.getByRole('alert').filter({hasText:'Достигнут лимит поискового сервиса'}).waitFor();
   ok(requests.length-quotaAt===2 && await page.locator('.simple-answer').count()===0,'quota error is not retried or replaced by an answer from memory');
+  scenario='planner503';const planAt=requests.length;await submit('Найди источники для нового вопроса');
+  await page.getByRole('alert').filter({hasText:'Модель не завершила планирование'}).waitFor();
+  ok(requests.length-planAt===1 && (await page.getByRole('alert').innerText()).includes('Поисковик ещё не вызывался') && (await page.getByRole('alert').innerText()).includes('HTTP 503'),'planner 503 shows its true stage and HTTP status without a search/retry');
+  scenario='search503';const searchAt=requests.length;await submit('Найди учебные источники');
+  await page.getByRole('alert').filter({hasText:'Поисковый этап не завершён'}).waitFor();
+  ok(requests.length-searchAt===2 && (await page.getByRole('alert').innerText()).includes('HTTP 503') && !(await page.getByRole('alert').innerText()).includes('PRIVATE_ERROR_SENTINEL'),'search 503 is different from a planner error and never leaks the response body');
+  scenario='network';const networkAt=requests.length;await submit('Найди источники при обрыве связи');
+  await page.getByRole('alert').filter({hasText:'Поисковик ещё не вызывался'}).waitFor();
+  ok(requests.length-networkAt===1 && (await page.getByRole('alert').innerText()).includes('нельзя отличить CORS'),'opaque fetch error stays uncertain and does not start hidden fallbacks');
   scenario='search';await settings();await page.getByRole('radio',{name:/Продвинутый/}).check();
   await page.getByLabel(/Личный ключ поиска \(необязательно\)/).fill(key);await page.getByRole('button',{name:'Подключить и проверить поиск'}).click();
   await page.getByText('Поиск ответил. Проверка тоже расходует доступную квоту.').waitFor();

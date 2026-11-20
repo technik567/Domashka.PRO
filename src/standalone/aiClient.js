@@ -1,3 +1,4 @@
+import { callQwen35Gateway as callQwen35OmniGateway, callQwen25Gateway as callQwenAwsGateway, callPollinationsGateway, LEGACY_QWEN_TIMEOUT_MS, POLLINATIONS_TIMEOUT_MS } from './legacyGateways';
 import { getQwenDemo, callQwenDemo } from './qwenDemo';
 import { runAnswerWorkflow, WORKFLOW_TIMEOUT_MS } from './workflow';
 import { buildSiteHelpPrompt } from './helpKnowledge';
@@ -31,7 +32,7 @@ import { CHEAT_SHEETS } from '../data/referenceData';
 import { BUILTIN_MODELS, DEFAULT_OPENROUTER_FREE_MODELS, DEFAULT_GEMINI_MODELS } from './modelCatalog';
 import { isTutorModeEnabled, subscribeParentalControl } from './parentalControl';
 import { buildTutorSystemPrompt, offlineTutorReply } from './tutorPolicy';
-import { fetchWithTimeout, linkAbortSignals, abortableDelay } from './network';
+import { fetchWithTimeout, abortableDelay } from './network';
 export { DEFAULT_OPENROUTER_FREE_MODELS, DEFAULT_GEMINI_MODELS } from './modelCatalog';
 
 export const SUBJECT_NAMES = {
@@ -71,16 +72,12 @@ const CHECK_TYPE_PROMPTS = {
     'Проверка итогового или экзаменационного сочинения ЕГЭ (К1–К10 ФИПИ): проверь объём (≥ 150 слов), формулировку позиции автора, комментарий с примерами-иллюстрациями и смысловой связью, собственную позицию с обоснованием и грамотность.',
 };
 
-// Precomputed 16x16 white PNG bytes for non-Cloudflare Qwen2.5-VL text-mode fallback
-const BLANK_16X16_PNG_B64 =
-  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFUlEQVR4nGP8//8/AzWAiSTVIxx1AA5xAx/73812AAAAAElFTkSuQmCC';
-
 let cachedOrModels = DEFAULT_OPENROUTER_FREE_MODELS;
 let cachedOrTs = 0;
 
 function canUseServerProxy() {
   if (typeof window === 'undefined') return false;
-  if (window.__STANDALONE_BUILD__) return false;
+  if (window.__STANDALONE_BUILD__ || cloudConfigured()) return false;
   const proto = window.location?.protocol || '';
   return proto === 'http:' || proto === 'https:';
 }
@@ -232,13 +229,6 @@ function splitDataUri(dataUri) {
   return { mime: 'image/jpeg', b64: dataUri };
 }
 
-function blankPngBlob() {
-  const bstr = atob(BLANK_16X16_PNG_B64);
-  const u8 = new Uint8Array(bstr.length);
-  for (let i = 0; i < bstr.length; i += 1) u8[i] = bstr.charCodeAt(i);
-  return new Blob([u8], { type: 'image/png' });
-}
-
 async function callServerProxyAi({
   provider, apiKey, model, systemPrompt, messages, images = [], ocrText, purpose,
   photoMode = 'auto', customVision = false, tutorOnly = false, tutorGrade = 8, tutorSubject = 'auto', reasoning = 'off', graphics = false, signal,
@@ -252,10 +242,14 @@ async function callServerProxyAi({
       supportsVision: getPhotoCapability({ provider, model, customVision }).maxImages > 0,
     }),
   }, provider === 'custom' ? 135000 : provider === 'openrouter' ? OPENROUTER_TIMEOUT_MS + 15000
-    : provider === 'builtin' && getPublicDemo(model) ? PUBLIC_DEMO_TIMEOUT_MS + 15000 : reasoning !== 'off' && provider === 'gemini' ? 135000 : 30000, signal);
+    : provider === 'builtin' ? (getPublicDemo(model) ? PUBLIC_DEMO_TIMEOUT_MS : model === 'pollinations' ? POLLINATIONS_TIMEOUT_MS : LEGACY_QWEN_TIMEOUT_MS) + 15000
+    : reasoning !== 'off' && provider === 'gemini' ? 135000 : 30000, signal);
   let data;
   try { data = await res.json(); } catch { throw new Error('Python API недоступен по этому адресу. Статический хостинг/GitHub Pages не запускает сервер Ollama.'); }
-  if (!res.ok || !data?.ok || !String(data.text || '').trim()) throw new Error(data?.error || `Сервер ИИ: HTTP ${res.status}, пустой ответ.`);
+  if (!res.ok || !data?.ok || !String(data.text || '').trim()) throw Object.assign(new Error(data?.error || `Сервер ИИ: HTTP ${res.status}, пустой ответ.`), {
+    code: /^[a-zA-Z0-9_-]{1,48}$/.test(data?.code || '') ? data.code : 'python-api',
+    status: Number.isInteger(data?.upstreamStatus) && data.upstreamStatus >= 400 && data.upstreamStatus <= 599 ? data.upstreamStatus : res.status >= 400 ? res.status : 0,
+  });
   return { text: normalizeLatex(data.text), used: data.used || 'ИИ через Python-сервер',
     extractedPhotoText: data.extractedPhotoText || ocrText || '', visionEngineLabel: data.visionEngineLabel || '' };
 }
@@ -366,183 +360,10 @@ async function callCustomLocalBrowser(baseUrl, apiKey, model, systemPrompt, mess
   return { text: normalizeLatex(content), used: `Ollama / свой API (${model || 'Ollama'})` };
 }
 
-function photoBlob(dataUri) {
-  const { mime, b64 } = splitDataUri(dataUri);
-  const bytes = Uint8Array.from(atob(b64), (character) => character.charCodeAt(0));
-  return new Blob([bytes], { type: mime });
-}
-
-/**
- * Gateway 0: Public Qwen3.5-Omni demo. Availability, model version and quotas are external.
- */
-async function callQwen35OmniGateway(systemPrompt, messages, signal, imageB64 = null) {
-  const { signal: linkedSignal, cleanup } = linkAbortSignals(signal, 19000);
-  const spaceHost = 'https://qwen-qwen3-5-omni-offline-demo.hf.space';
-  try {
-    const priorHistory = messages.slice(0, -1).slice(-6).map((m) => ({
-      role: m.role === 'assistant' ? 'assistant' : 'user',
-      content: String(m.content || ''),
-    }));
-    const lastPrompt = String(messages[messages.length - 1]?.content || 'Помоги выполнить задание.');
-
-    let imageDescriptor = null;
-    if (imageB64) {
-      const form = new FormData();
-      const blob = photoBlob(imageB64);
-      form.append('files', blob, blob.type === 'image/png' ? 'homework.png' : 'homework.jpg');
-      const upload = await fetch(`${spaceHost}/gradio_api/upload`, { method: 'POST', body: form, signal: linkedSignal });
-      if (!upload.ok) throw new Error(`Qwen3.5 upload HTTP ${upload.status}`);
-      const paths = await upload.json();
-      if (!paths?.[0]) throw new Error('Нет пути загруженного фото Qwen3.5');
-      imageDescriptor = { path: paths[0], meta: { _type: 'gradio.FileData' } };
-    }
-    const callResp = await fetch(`${spaceHost}/gradio_api/call/chat_predict`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        data: [lastPrompt, null, imageDescriptor, null, priorHistory, systemPrompt || '', 0.35, 0.85, 20],
-      }),
-      signal: linkedSignal,
-    });
-    if (!callResp.ok) throw new Error(`Qwen3.5 HTTP ${callResp.status}`);
-    const { event_id: eventId } = await callResp.json();
-    if (!eventId) throw new Error('Missing Qwen3.5 event_id');
-
-    const sseResp = await fetch(`${spaceHost}/gradio_api/call/chat_predict/${eventId}`, {
-      signal: linkedSignal,
-    });
-    if (!sseResp.ok) throw new Error(`Qwen3.5 SSE HTTP ${sseResp.status}`);
-    const lines = (await sseResp.text()).split('\n');
-    let out = '';
-    for (let i = 0; i < lines.length; i += 1) {
-      const ln = lines[i].trim();
-      if (ln === 'event: error') throw new Error('Qwen3.5 SSE error');
-      if (ln === 'event: complete' && i + 1 < lines.length) {
-        const nxt = lines[i + 1].trim();
-        if (nxt.startsWith('data:')) {
-          const arr = JSON.parse(nxt.slice(5).trim());
-          const hist = Array.isArray(arr) ? arr[4] : null;
-          if (Array.isArray(hist) && hist.length > 0) {
-            const c = hist[hist.length - 1]?.content;
-            out = Array.isArray(c)
-              ? c.map((b) => (typeof b === 'string' ? b : b?.text || '')).join('\n')
-              : String(c || '');
-          }
-          break;
-        }
-      }
-    }
-    out = out.trim();
-    if (!out || out.toLowerCase().startsWith('[error]')) {
-      throw new Error('Empty Qwen3.5 output');
-    }
-    return { text: normalizeLatex(out), used: 'Qwen 3.5 Omni (облачный шлюз)' };
-  } finally {
-    cleanup();
-  }
-}
-
-/**
- * Gateway A: Pollinations OpenAI (10.5s strict AbortController timeout — never hangs on DPI stall!)
- */
-async function callPollinationsGateway(systemPrompt, messages, signal) {
-  const res = await fetchWithTimeout(
-    'https://text.pollinations.ai/openai',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'openai',
-        messages: [{ role: 'system', content: systemPrompt }, ...messages.slice(-8)],
-        temperature: 0.35,
-        seed: Math.floor(Math.random() * 100000),
-      }),
-    },
-    10500,
-    signal
-  );
-  if (!res.ok) {
-    throw new Error(`Pollinations HTTP ${res.status}`);
-  }
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content || '';
-  if (!content.trim()) throw new Error('Empty Pollinations content');
-  return { text: normalizeLatex(content), used: 'Pollinations (облачный маршрутизатор)' };
-}
-
-/**
- * Gateway B: Non-Cloudflare AWS Qwen2.5-VL-7B-Instruct (/qwen_vl_inference, 17s strict timeout).
- * Network reachability depends on the device and provider; no bypass guarantee.
- */
-async function callQwenAwsGateway(systemPrompt, messages, signal, imageB64 = null) {
-  const { signal: linkedSignal, cleanup } = linkAbortSignals(signal, 17500);
-  const spaceHost = 'https://developer0hye-qwen2-5-vl-7b-instruct.hf.space';
-  try {
-    const form = new FormData();
-    const blob = imageB64 ? photoBlob(imageB64) : blankPngBlob();
-    form.append('files', blob, blob.type === 'image/png' ? 'homework.png' : 'homework.jpg');
-    const upResp = await fetch(`${spaceHost}/gradio_api/upload`, {
-      method: 'POST',
-      body: form,
-      signal: linkedSignal,
-    });
-    if (!upResp.ok) throw new Error(`Qwen upload HTTP ${upResp.status}`);
-    const upArr = await upResp.json();
-    const remotePath = Array.isArray(upArr) ? upArr[0] : null;
-    if (!remotePath) throw new Error('No Qwen upload path');
-
-    const convo = messages
-      .slice(-12)
-      .map((m) => `${m.role === 'assistant' ? 'Учитель' : 'Ученик'}: ${m.content || ''}`)
-      .join('\n\n');
-    const combinedPrompt =
-      (imageB64 ? 'Рассмотри само изображение, включая схемы и рисунки.\n\n' : 'Игнорируй пустой белый фон.\n\n') +
-      `[Инструкция школьного учителя]:\n${systemPrompt}\n\n${convo}`;
-
-    const callResp = await fetch(`${spaceHost}/gradio_api/call/qwen_vl_inference`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        data: [{ path: remotePath, meta: { _type: 'gradio.FileData' } }, combinedPrompt],
-      }),
-      signal: linkedSignal,
-    });
-    if (!callResp.ok) throw new Error(`Qwen call HTTP ${callResp.status}`);
-    const { event_id: eventId } = await callResp.json();
-    if (!eventId) throw new Error('Missing Qwen event_id');
-
-    const sseResp = await fetch(`${spaceHost}/gradio_api/call/qwen_vl_inference/${eventId}`, {
-      signal: linkedSignal,
-    });
-    if (!sseResp.ok) throw new Error(`Qwen SSE HTTP ${sseResp.status}`);
-    const sseText = await sseResp.text();
-    const lines = sseText.split('\n');
-    let out = '';
-    for (let i = 0; i < lines.length; i += 1) {
-      const ln = lines[i].trim();
-      if (ln === 'event: error') throw new Error('Qwen SSE error');
-      if (ln === 'event: complete' && i + 1 < lines.length) {
-        const nxt = lines[i + 1].trim();
-        if (nxt.startsWith('data:')) {
-          const parsed = JSON.parse(nxt.slice(5).trim());
-          out = String(Array.isArray(parsed) ? parsed[0] || '' : parsed || '').trim();
-          break;
-        }
-      }
-    }
-    if (!out || out.toLowerCase().includes('exceeded your zerogpu') || out.toLowerCase().startsWith('[error]')) {
-      throw new Error('Invalid Qwen output');
-    }
-    return { text: normalizeLatex(out), used: 'Qwen 2.5 VL (облачный шлюз)' };
-  } finally {
-    cleanup();
-  }
-}
-
 /**
  * Built-in Zero-Key Multi-Gateway Browser Engine:
- * Races Pollinations (10.5s timeout) and Non-Cloudflare AWS Qwen2.5 (17.5s timeout, 1.1s stagger)
- * in parallel so neither Cloudflare DPI blocks nor 45s rate limits ever freeze the student!
+ * Only explicit Auto may race the original routes. Each has a real deadline;
+ * no newer demos, paid endpoints or authentication/quota bypass are added.
  */
 async function callBuiltinFreeBrowser(
   systemPrompt, messages, onStatus, fallbackMode = 'solve', fallbackMeta = {}, signal,
@@ -551,10 +372,18 @@ async function callBuiltinFreeBrowser(
   throwIfUserAborted(signal);
   const selected = model || 'auto';
   if (!BUILTIN_MODELS.some((m) => m.id === selected)) throw new Error('Неизвестная облачная модель. Выберите её заново в настройках.');
+  const modelError = error => {
+    throwIfUserAborted(signal);
+    return Object.assign(new Error(`Модель ${BUILTIN_MODELS.find(m => m.id === selected).name}: ${error.message}`), {
+      code: error.code, status: error.status,
+    });
+  };
   if (getPublicDemo(selected)) {
-    const result = await callPublicDemo({ model: selected, systemPrompt, messages, imageB64,
-      tutorOnly: fallbackMode === 'tutor', signal, onStatus });
-    return { ...result, text: normalizeLatex(result.text) };
+    try {
+      const result = await callPublicDemo({ model: selected, systemPrompt, messages, imageB64,
+        tutorOnly: fallbackMode === 'tutor', signal, onStatus });
+      return { ...result, text: normalizeLatex(result.text) };
+    } catch (error) { throw modelError(error); }
   }
   const gateways = {
     'qwen-3.5': callQwen35OmniGateway,
@@ -563,11 +392,9 @@ async function callBuiltinFreeBrowser(
   };
   onStatus?.({ stage: 'thinking', message: fallbackMode === 'tutor' ? 'Репетитор готовит одну подсказку...' : 'Выбранная нейросеть разбирает задание...' });
   if (selected !== 'auto') {
-    try { return await gateways[selected](systemPrompt, messages, signal, imageB64); }
-    catch (error) {
-      throwIfUserAborted(signal);
-      throw new Error(`Модель ${BUILTIN_MODELS.find((m) => m.id === selected).name} недоступна. Попробуйте позже или выберите другую модель. (${error.message})`);
-    }
+    onStatus?.({ stage: 'cloud', message: selected === 'pollinations' ? 'Pollinations: ожидаем ответ, до 45 секунд…' : 'Qwen: ожидаем очередь и ответ, до 5 минут. Можно остановить ожидание.' });
+    try { const result = await gateways[selected](systemPrompt, messages, signal, imageB64, onStatus); return { ...result, text: normalizeLatex(result.text) }; }
+    catch (error) { throw modelError(error); }
   }
 
   const raceController = new AbortController();
@@ -577,18 +404,27 @@ async function callBuiltinFreeBrowser(
     await abortableDelay(delay, raceController.signal);
     return fn(systemPrompt, messages, raceController.signal, imageB64);
   };
+  let failureSummary = '';
+  onStatus?.({ stage: 'cloud', message: 'Авто: ожидаем исходные бесплатные маршруты, до 5 минут. Можно остановить ожидание.' });
   try {
     const tasks = [delayed(callQwen35OmniGateway, 0), delayed(callQwenAwsGateway, imageB64 ? 1200 : 2500)];
     if (!imageB64) tasks.push(delayed(callPollinationsGateway, 1200));
-    return await Promise.any(tasks);
-  } catch {
+    const result = await Promise.any(tasks);
+    return { ...result, text: normalizeLatex(result.text) };
+  } catch (error) {
     throwIfUserAborted(signal);
+    const labels = ['Qwen 3.5', 'Qwen 2.5 VL', 'Pollinations'];
+    failureSummary = (error?.errors || []).slice(0,3).map((cause,i) => {
+      // These adapters already redact provider bodies. Preserve route/status
+      // evidence rather than guessing that every failure is the phone's CORS.
+      return `${labels[i]}: ${cause?.message || 'ответ не получен'}`;
+    }).join(' ');
   } finally {
     raceController.abort();
     signal?.removeEventListener('abort', onParentAbort);
   }
-  if (imageB64) throw new Error('Не удалось передать фото выбранным Vision-шлюзам. Попробуйте позже, смените модель или явно выберите OCR; изображение не было подменено текстом.');
-  if (!allowLocalFallback) throw new Error('Облачное соединение не установлено. Локальный ответ не считается проверкой связи.');
+  if (imageB64) throw new Error('Vision-маршруты не вернули ответ. Фото могло быть принято сервисом; оно не подменялось OCR. ' + failureSummary);
+  if (!allowLocalFallback) throw new Error('Авто не получило облачный ответ. Локальный ответ не подменяет этот этап. ' + failureSummary);
   if (fallbackMode === 'tutor') return offlineTutorReply(messages);
   if (fallbackMode === 'check') {
     const express = runLocalExpressCheck({
@@ -599,7 +435,7 @@ async function callBuiltinFreeBrowser(
   }
   const localAttempt = tryOfflineFallbackSolve(messages.at(-1)?.content || '', fallbackMeta.grade || 8, fallbackMeta.subject || 'auto');
   if (localAttempt) return { text: localAttempt, used: 'Автономная база знаний и решатель Домашка.ПРО' };
-  throw new Error('Бесплатные облачные шлюзы недоступны. Проверьте сеть или выберите другого провайдера в настройках ИИ.');
+  throw new Error('Бесплатные облачные маршруты не вернули ответ. Автоматического повтора нет. ' + failureSummary);
 }
 
 /**
@@ -608,7 +444,7 @@ async function callBuiltinFreeBrowser(
 function tryOfflineFallbackSolve(text, grade = 8, subject = 'auto') {
   if (!text) return null;
   const offlineNote =
-    `\n\n---\n> 💡 *Ответ подготовлен автономным модулем «Домашка.ПРО» (облачные шлюзы сейчас недоступны в вашей сети или открыт офлайн-просмотр). Для живого диалога с нейросетью откройте онлайн-версию сайта или подключите бесплатный ключ Google Gemini в «Настройках ИИ».*`;
+    `\n\n---\n> 💡 *Ответ подготовлен автономным модулем «Домашка.ПРО», а не облачной нейросетью. Облачный ответ не получен; это не устанавливает причину сбоя сети или сервиса. Можно явно выбрать другую модель или повторить позже.*`;
 
   // 1. Equations with x / y
   const eqMatch = text.match(/([0-9xXyY+\-*/^()\s²³]{3,}=[0-9xXyY+\-*/^()\s²³\-]{1,})/);
@@ -820,7 +656,7 @@ async function generateAiRequest({
       throwIfUserAborted(signal);
       // Do not spend a public demo's quota twice after a server failure.
       // A selected local transport also never switches to the phone's localhost/cloud.
-      if (provider === 'openrouter' || provider === 'gemini' || (provider === 'builtin' && getPublicDemo(model))) throw error;
+      if (['builtin', 'openrouter', 'gemini'].includes(provider)) throw error;
       if (provider === 'custom') {
         if (error?.name === 'TimeoutError') throw new Error('Истекло ожидание Python-сервера (135 секунд). Проверьте Ollama и загрузку модели на компьютере.');
         if (error instanceof TypeError || /failed to fetch|load failed|networkerror/i.test(error?.message || '')) throw new Error('Не удалось связаться с вашим Python-сервером. Проверьте, что server.py работает и страница открыта с его адреса. GitHub Pages и скачанный HTML не предоставляют этот API.');

@@ -4,13 +4,11 @@ from pathlib import Path
 import base64
 import json
 import re
-import struct
 import time
-import zlib
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from . import ollama_service, public_demos
+from . import ollama_service, public_demos, legacy_gateways
 
 # Fallback catalog, not a live availability or quota guarantee.
 DEFAULT_OPENROUTER_FREE_MODELS: List[Dict[str, Any]] = [
@@ -525,21 +523,6 @@ def _call_gemini(
     raise RuntimeError(f"Не удалось получить ответ от Google Gemini ({last_err}).")
 
 
-def _make_blank_white_png() -> bytes:
-    w, h = 16, 16
-    raw = b"".join(b"\x00" + b"\xff\xff\xff" * w for _ in range(h))
-
-    def _chunk(tag: bytes, data: bytes) -> bytes:
-        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + _chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
-        + _chunk(b"IDAT", zlib.compress(raw))
-        + _chunk(b"IEND", b"")
-    )
-
-
 def _is_valid_extracted_text(txt: str) -> bool:
     clean = (txt or "").strip()
     if len(clean) < 2:
@@ -558,145 +541,23 @@ def _is_valid_extracted_text(txt: str) -> bool:
     return bool(re.search(r"[А-Яа-яЁёA-Za-z0-9]", clean))
 
 
-def _extract_qwen35_omni_sse(sse_text: str) -> str:
-    lines = sse_text.splitlines()
-    for idx, ln in enumerate(lines):
-        if ln.strip() == "event: error":
-            raise RuntimeError("Qwen3.5-Omni SSE error")
-        if ln.strip() == "event: complete" and idx + 1 < len(lines):
-            nxt = lines[idx + 1].strip()
-            if nxt.startswith("data:"):
-                arr = json.loads(nxt[5:].strip())
-                if isinstance(arr, list) and len(arr) >= 5 and isinstance(arr[4], list) and arr[4]:
-                    last_msg = arr[4][-1]
-                    content = last_msg.get("content", "") if isinstance(last_msg, dict) else str(last_msg)
-                    if isinstance(content, list):
-                        content = "\n".join(
-                            (b.get("text", "") if isinstance(b, dict) else str(b)) for b in content
-                        )
-                    out = str(content or "").strip()
-                    if _is_valid_extracted_text(out):
-                        return _normalize_latex_delimiters(out)
-    raise RuntimeError("Empty Qwen3.5-Omni response")
-
-
 def _call_qwen35_omni_server(
     text_prompt: str,
     system_prompt: str = "",
     history: Optional[List[Dict[str, Any]]] = None,
     image_b64: Optional[str] = None,
-    timeout: float = 18.0,
+    timeout: float = legacy_gateways.QWEN_TIMEOUT,
 ) -> str:
-    host = "https://qwen-qwen3-5-omni-offline-demo.hf.space"
-    img_descriptor = None
-    if image_b64:
-        mime, raw_b64 = _split_data_uri(image_b64)
-        img_bytes = base64.b64decode(raw_b64)
-        ext = "png" if "png" in mime else "jpg"
-        up = httpx.post(
-            f"{host}/gradio_api/upload",
-            files={"files": (f"homework.{ext}", img_bytes, mime)},
-            timeout=min(10.0, timeout),
-        )
-        up.raise_for_status()
-        up_path = up.json()[0]
-        img_descriptor = {"path": up_path, "meta": {"_type": "gradio.FileData"}}
-
-    clean_hist = [
-        {"role": m.get("role", "user"), "content": str(m.get("content", ""))}
-        for m in (history or [])[-6:]
-    ]
-    call_r = httpx.post(
-        f"{host}/gradio_api/call/chat_predict",
-        json={
-            "data": [
-                text_prompt,
-                None,
-                img_descriptor,
-                None,
-                clean_hist,
-                system_prompt or "",
-                0.35,
-                0.85,
-                20,
-            ]
-        },
-        timeout=min(10.0, timeout),
-    )
-    call_r.raise_for_status()
-    ev = call_r.json().get("event_id")
-    if not ev:
-        raise RuntimeError("Missing Qwen3.5-Omni event_id")
-
-    sse_r = httpx.get(f"{host}/gradio_api/call/chat_predict/{ev}", timeout=timeout)
-    sse_r.raise_for_status()
-    return _extract_qwen35_omni_sse(sse_r.text)
+    return _normalize_latex_delimiters(legacy_gateways.call_qwen(
+        "qwen35", text_prompt, system_prompt, history, image_b64, timeout))
 
 
 def _call_qwen_vl_server(
     prompt: str,
     image_b64: Optional[str] = None,
-    timeout: float = 16.0,
+    timeout: float = legacy_gateways.QWEN_TIMEOUT,
 ) -> str:
-    host = "https://developer0hye-qwen2-5-vl-7b-instruct.hf.space"
-    if image_b64:
-        mime, raw_b64 = _split_data_uri(image_b64)
-        img_bytes = base64.b64decode(raw_b64)
-        ext = "png" if "png" in mime else "jpg"
-    else:
-        mime = "image/png"
-        img_bytes = _make_blank_white_png()
-        ext = "png"
-
-    up = httpx.post(
-        f"{host}/gradio_api/upload",
-        files={"files": (f"homework.{ext}", img_bytes, mime)},
-        timeout=min(10.0, timeout),
-    )
-    up.raise_for_status()
-    up_path = up.json()[0]
-
-    call_r = httpx.post(
-        f"{host}/gradio_api/call/qwen_vl_inference",
-        json={
-            "data": [
-                {"path": up_path, "meta": {"_type": "gradio.FileData"}},
-                prompt,
-            ]
-        },
-        timeout=min(10.0, timeout),
-    )
-    call_r.raise_for_status()
-    event_id = call_r.json().get("event_id")
-    if not event_id:
-        raise RuntimeError("No event_id from Qwen2.5-VL")
-
-    sse_r = httpx.get(
-        f"{host}/gradio_api/call/qwen_vl_inference/{event_id}",
-        timeout=timeout,
-    )
-    sse_r.raise_for_status()
-    lines = sse_r.text.splitlines()
-    for idx, ln in enumerate(lines):
-        if ln.strip() == "event: error":
-            raise RuntimeError("Qwen2.5-VL event error")
-        if ln.strip() == "event: complete" and idx + 1 < len(lines):
-            nxt = lines[idx + 1]
-            if nxt.startswith("data:"):
-                arr = json.loads(nxt[5:].strip())
-                out = str(arr[0] if isinstance(arr, list) and arr else arr).strip()
-                if _is_valid_extracted_text(out):
-                    return _normalize_latex_delimiters(out)
-    for ln in reversed(lines):
-        if ln.startswith("data:"):
-            try:
-                arr = json.loads(ln[5:].strip())
-                out = str(arr[0] if isinstance(arr, list) and arr else arr).strip()
-                if _is_valid_extracted_text(out):
-                    return _normalize_latex_delimiters(out)
-            except Exception:
-                pass
-    raise RuntimeError("Empty Qwen2.5-VL response")
+    return _normalize_latex_delimiters(legacy_gateways.call_qwen("qwen25", prompt, image=image_b64, timeout=timeout))
 
 
 def _call_ocr_space_server(image_b64: str, timeout: float = 10.0) -> str:
@@ -734,7 +595,7 @@ def recognize_photo_server(
     api_key: str = "",
     model: str = "",
 ) -> Tuple[str, str]:
-    """Fast server-side Vision/OCR cascade immune to client ISP/Cloudflare blocks."""
+    """Explicit OCR cascade; external availability/recognition are not guaranteed."""
     is_draft = purpose in ("check", "draft_check")
     vision_prompt = (
         "Ты — точный ИИ-сканер школьных тетрадей. Дословно перепиши весь рукописный и печатный текст, "
@@ -778,15 +639,15 @@ def recognize_photo_server(
     errors: List[str] = []
     tiers = (
         [
-            ("Qwen3.5-Omni ИИ-зрение (сервер)", lambda: _call_qwen35_omni_server(vision_prompt, "Выведи только распознанный текст с изображения без вступлений.", None, image_b64, timeout=14.0)),
+            ("Qwen3.5-Omni ИИ-зрение (сервер)", lambda: _call_qwen35_omni_server(vision_prompt, "Выведи только распознанный текст с изображения без вступлений.", None, image_b64, timeout=60.0)),
             ("OCR.space Engine 2 (сервер)", lambda: _call_ocr_space_server(image_b64, timeout=9.0)),
-            ("Qwen2.5-VL ИИ-зрение (сервер)", lambda: _call_qwen_vl_server(vision_prompt, image_b64, timeout=14.0)),
+            ("Qwen2.5-VL ИИ-зрение (сервер)", lambda: _call_qwen_vl_server(vision_prompt, image_b64, timeout=60.0)),
         ]
         if is_draft
         else [
             ("OCR.space Engine 2 (сервер)", lambda: _call_ocr_space_server(image_b64, timeout=8.5)),
-            ("Qwen3.5-Omni ИИ-зрение (сервер)", lambda: _call_qwen35_omni_server(vision_prompt, "Выведи только распознанный текст с изображения без вступлений.", None, image_b64, timeout=14.0)),
-            ("Qwen2.5-VL ИИ-зрение (сервер)", lambda: _call_qwen_vl_server(vision_prompt, image_b64, timeout=14.0)),
+            ("Qwen3.5-Omni ИИ-зрение (сервер)", lambda: _call_qwen35_omni_server(vision_prompt, "Выведи только распознанный текст с изображения без вступлений.", None, image_b64, timeout=60.0)),
+            ("Qwen2.5-VL ИИ-зрение (сервер)", lambda: _call_qwen_vl_server(vision_prompt, image_b64, timeout=60.0)),
         ]
     )
     for label, fn in tiers:
@@ -795,7 +656,7 @@ def recognize_photo_server(
             if _is_valid_extracted_text(out):
                 return out.strip(), label
         except Exception as exc:
-            errors.append(f"{label}: {exc}")
+            errors.append(f"{label}: {exc}" if isinstance(exc, public_demos.PublicDemoError) else f"{label}: ответ не получен")
 
     raise RuntimeError(f"Не удалось распознать текст на фото ({'; '.join(errors)}).")
 
@@ -816,28 +677,29 @@ def _call_builtin_free(
     if selected not in ("auto", "qwen-3.5", "pollinations", "qwen-2.5-vl"):
         raise ValueError("Неизвестная бесплатная облачная модель. Выберите её заново в настройках.")
 
+    deadline = time.monotonic() + legacy_gateways.QWEN_TIMEOUT
+
+    def remaining(maximum=legacy_gateways.QWEN_TIMEOUT):
+        seconds = deadline - time.monotonic()
+        if seconds <= 0:
+            raise public_demos.PublicDemoError("timeout")
+        return min(maximum, seconds)
+
     def qwen35():
         return _call_qwen35_omni_server(
             text_prompt=(messages[-1].get("content", "") if messages else ""),
-            system_prompt=system_prompt, history=messages[:-1], image_b64=image_b64, timeout=20.0,
+            system_prompt=system_prompt, history=messages[:-1], image_b64=image_b64, timeout=remaining(),
         )
 
     def pollinations():
-        response = httpx.post(
-            "https://text.pollinations.ai/openai",
-            json={"model": "openai", "messages": [{"role": "system", "content": system_prompt}] + messages,
-                  "temperature": 0.35}, timeout=12.0,
-        )
-        if response.status_code != 200:
-            raise RuntimeError(f"HTTP {response.status_code}")
-        return (((response.json().get("choices") or [{}])[0].get("message") or {}).get("content") or "")
+        return legacy_gateways.call_pollinations(system_prompt, messages, timeout=remaining(legacy_gateways.POLLINATIONS_TIMEOUT))
 
     def qwen25():
         # Crucially keep the tutor policy and conversation, not just the last question.
         conversation = "\n\n".join(f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages)
         return _call_qwen_vl_server(
             ("Рассмотри само изображение. " if image_b64 else "Игнорируй пустой фон. ") + f"Следуй инструкции учителя:\n{system_prompt}\n\n{conversation}",
-            image_b64=image_b64, timeout=16.0,
+            image_b64=image_b64, timeout=remaining(),
         )
 
     gateways = [("qwen-3.5", "Qwen 3.5 Omni", qwen35),
@@ -856,7 +718,12 @@ def _call_builtin_free(
             return _normalize_latex_delimiters(text), f"{label} (облачный шлюз)"
         except Exception as exc:
             # Do not expose request URLs, credentials or provider response bodies to the client.
-            errors.append(f"{label}: {type(exc).__name__}")
+            errors.append(f"{label}: {exc}" if isinstance(exc, (public_demos.PublicDemoError, legacy_gateways.PollinationsError))
+                          else f"{label}: ответ не получен")
+            if selected != "auto":
+                raise
+            if time.monotonic() >= deadline:
+                break
     raise RuntimeError("Выбранный облачный ИИ недоступен. Попробуйте позже или смените модель в настройках. " + "; ".join(errors))
 
 

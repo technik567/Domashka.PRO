@@ -61,15 +61,31 @@ export async function runAnswerWorkflow({ options, messages, systemPrompt, reque
     else trail.push({ id: ++sequence, stage, message, state, elapsedMs: Date.now()-started, ...extra });
     onStatus?.({ stage, message, trail: trail.map(x => ({...x})), elapsedMs: Date.now()-started });
   };
+  const failed = (stage, message, error) => {
+    throwIfAborted(signal);
+    // Only a fixed public action enters the receipt. Adapter messages are
+    // transient UI errors, not prompts/thoughts/provider bodies in history.
+    emit(stage, message, 'warning');
+    return Object.assign(new Error(`${message} ${error?.message || 'Нет подтверждённого ответа.'}`), {
+      stage, code: /^[a-zA-Z0-9_-]{1,48}$/.test(error?.code || '') ? error.code : 'workflow',
+      status: Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599 ? error.status : 0,
+    });
+  };
   const call = async (stage, label, patch = {}) => {
     throwIfAborted(signal); calls++;
     emit(stage, label);
-    const output = await withAbort(request({ ...options, messages, systemPrompt, ...patch, ocrText: cachedOcr,
-      reasoning: patch.reasoning ?? level,
-      onStatus: st => {
-        // Transport details are transient. No untrusted model text in the trail.
-        if (!signal?.aborted) onStatus?.({ ...st, stage, message: label, transportMessage: st.message, trail: trail.map(x=>({...x})), elapsedMs: Date.now()-started });
-      }, signal }), signal);
+    let output;
+    try {
+      output = await withAbort(request({ ...options, messages, systemPrompt, ...patch, ocrText: cachedOcr,
+        reasoning: patch.reasoning ?? level,
+        onStatus: st => {
+          // Transport details are transient. No untrusted model text in the trail.
+          if (!signal?.aborted) onStatus?.({ ...st, stage, message: label, transportMessage: st.message, trail: trail.map(x=>({...x})), elapsedMs: Date.now()-started });
+        }, signal }), signal);
+    } catch (error) {
+      throw failed(stage, stage === 'plan' ? 'Модель не завершила планирование. Поисковик ещё не вызывался.'
+        : stage.startsWith('review-') ? 'Дополнительная проверка модели не завершена.' : 'Ответ модели не получен.', error);
+    }
     throwIfAborted(signal);
     if (output.photoInputUsed === 'vision') cachedOcr = '';
     else if (output.extractedPhotoText) cachedOcr = output.extractedPhotoText;
@@ -83,13 +99,17 @@ export async function runAnswerWorkflow({ options, messages, systemPrompt, reque
     const planned = await call('plan', 'Определяю, нужны ли источники…', {
       systemPrompt: plannerPrompt(maxQueries), graphics: false, reasoning: 'off', allowLocalFallback: false,
     });
-    const plan = parseSearchPlan(planned.text, maxQueries);
+    let plan;
+    try { plan = parseSearchPlan(planned.text, maxQueries); }
+    catch (error) { throw failed('plan', 'План модели не принят. Поисковик ещё не вызывался.', error); }
     if (plan.search) {
       const batches = [];
       for (const query of plan.queries) {
         throwIfAborted(signal);
         emit(`search-${searches+1}`, 'Ищу источники…', 'active', { query });
-        const found = await withAbort(search(query, { signal, tutorOnly }), signal);
+        let found;
+        try { found = await withAbort(search(query, { signal, tutorOnly }), signal); }
+        catch (error) { throw failed(`search-${searches+1}`, 'Поисковый этап не завершён. Ответ по памяти не подменяет поиск.', error); }
         throwIfAborted(signal); searches++;
         batches.push(found.results);
         emit(`search-${searches}`, `Получены выдержки из источников: ${found.results.length}`, 'done', { query });

@@ -487,6 +487,10 @@ class DomashkaHandler(BaseHTTPRequestHandler):
                 return
 
             self._send_json(404, {"ok": False, "error": f"Маршрут {path} не найден"})
+        except (ai_service.public_demos.PublicDemoError, ai_service.legacy_gateways.PollinationsError) as exc:
+            # These adapters expose only fixed, redacted messages/statuses.
+            # No traceback with provider URLs/bodies or double browser fallback.
+            self._send_json(200, {"ok": False, "error": str(exc), "code": exc.code, "upstreamStatus": exc.status})
         except Exception as exc:
             traceback.print_exc()
             self._send_json(200, {"ok": False, "error": str(exc)})

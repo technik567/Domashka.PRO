@@ -35,7 +35,7 @@ describe('native photos, never a silent OCR substitution', () => {
       if (url.endsWith('/upload')) { uploaded = options.body.get('files'); return json(['/tmp/test-photo.png']); }
       if (options.method === 'POST') { payload = JSON.parse(options.body); return json({ event_id: 'test-event' }); }
       const result = model === 'qwen-3.5' ? [null, null, null, null, [{ role: 'assistant', content: 'На рисунке треугольник.' }]] : ['На рисунке треугольник.'];
-      return new Response(`event: complete\ndata: ${JSON.stringify(result)}\n\n`);
+      return new Response(`event: complete\ndata: ${JSON.stringify(result)}\n\n`, { headers: { 'Content-Type': 'text/event-stream' } });
     });
     await generateAiBrowser({ ...request, provider: 'builtin', model, images: [photos[0]], photoMode: 'vision' });
     expect(uploaded.size).toBe(3);
