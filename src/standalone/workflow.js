@@ -1,7 +1,8 @@
 import { compileMathExpression } from './mathExpression';
 import { resolveReasoning, reasoningPrompt, reasoningInfo } from './aiModes';
 import { searchContext, searchFooter, searchExcerpts, validateSearchResults } from './webSearch';
-import { parseSearchAction, searchActionPrompt, NO_SEARCH_NOTE } from './searchActions';
+import { parseSearchAction } from './searchActions';
+import { planLocalSearch, LOCAL_SEARCH_LABELS, localSearchDisclosure } from './localSearchPlan';
 import { throwIfAborted, withAbort } from './network';
 export { parseSearchPlan } from './searchActions';
 
@@ -40,12 +41,13 @@ export async function runAnswerWorkflow({ options, messages, systemPrompt, reque
   const level = resolveReasoning(options.reasoning, messages.at(-1)?.content, Boolean(options.imageB64 || options.images?.length));
   const started = Date.now(), trail = [];
   const wantsSearch = options.webSearch === true || options.webSearch === 'auto';
-  const maxQueries = level === 'high' ? 2 : 1;
+  throwIfAborted(signal);
   if (wantsSearch && tutorOnly) throw new Error('В режиме репетитора внешний поиск отключён родительскими правилами.');
   let sequence = 0, calls = 0, searches = 0, cachedOcr = options.ocrText || '', sourceData = null;
-  // Keep answer/reviewer policy separate from the one-shot search permission.
-  // Neither search excerpts nor reviews may schedule a recursive tool loop.
+  // Search decisions are local and precede ALL model generations. Neither
+  // the answer, source excerpts nor reviews may schedule a tool call.
   systemPrompt += reasoningPrompt(level);
+  if (wantsSearch) systemPrompt += '\nПОИСКОМ УПРАВЛЯЕТ ПРИЛОЖЕНИЕ. Не вызывай встроенные инструменты, не возвращай команды или JSON-планы поиска. Если ниже нет ПОИСКОВЫХ ДАННЫХ, интернет не использовался: не утверждай, что искал или проверял новые источники. Отвечай по правилам учителя; отсутствие данных обозначай явно.';
   const emit = (stage, message, state = 'active', extra = {}) => {
     if (signal?.aborted) return;
     const previous = trail.at(-1);
@@ -69,18 +71,18 @@ export async function runAnswerWorkflow({ options, messages, systemPrompt, reque
     emit(stage, label);
     let output;
     try {
+      throwIfAborted(signal); // A status subscriber may have pressed Stop.
       output = await withAbort(request({ ...options, messages, systemPrompt, ...patch, ocrText: cachedOcr,
         reasoning: patch.reasoning ?? level,
         onStatus: st => {
           // Transport details are transient. No untrusted model text in the trail.
           if (!signal?.aborted) onStatus?.({ ...st, stage, message: label, transportMessage: st.message, trail: trail.map(x=>({...x})), elapsedMs: Date.now()-started });
         }, signal }), signal);
-      if (wantsSearch && stage !== 'answer-or-search' && parseSearchAction(output.text, maxQueries)) {
-        throw Object.assign(new Error('Повторная команда поиска вместо ответа не принята. Нового поиска и автоматического повтора нет.'), {code:'search-action-unexpected'});
+      if (wantsSearch && parseSearchAction(output.text)) {
+        throw Object.assign(new Error('Команда поиска от модели не выполняется. Поиск определяют локальные правила приложения; нового запроса и автоматического повтора нет.'), {code:'search-action-unexpected'});
       }
     } catch (error) {
-      throw failed(stage, stage === 'answer-or-search' ? 'Модель не вернула ответ или запрос к поиску. Поисковик ещё не вызывался.'
-        : stage.startsWith('review-') ? 'Дополнительная проверка модели не завершена.' : 'Ответ модели не получен.', error);
+      throw failed(stage, stage.startsWith('review-') ? 'Дополнительная проверка модели не завершена.' : wantsSearch && !sourceData ? 'Ответ модели не получен. Локальные правила не запускали поиск.' : 'Ответ модели не получен.', error);
     }
     throwIfAborted(signal);
     if (output.photoInputUsed === 'vision') cachedOcr = '';
@@ -88,53 +90,45 @@ export async function runAnswerWorkflow({ options, messages, systemPrompt, reque
     emit(stage, label.replace(/…$/, '') + ' — завершено', 'done');
     return output;
   };
-  let result, firstResult, sourcesOnly = false;
+  let result, sourcesOnly = false, searchDecision;
   if (wantsSearch) {
-    // One model generation either answers the question or asks for sources.
-    // Do not force reasoning off, discard the teacher prompt/graphics, or
-    // require a JSON-only planning pass for every ordinary question.
-    const first = await call('answer-or-search', 'Готовлю ответ; при необходимости запрошу источники…', {
-      systemPrompt: systemPrompt + searchActionPrompt(maxQueries), allowLocalFallback:false,
-    });
-    let plan;
-    try { plan = parseSearchAction(first.text, maxQueries); }
-    catch (error) { throw failed('answer-or-search', 'Команда поиска не принята. Поисковик ещё не вызывался.', error); }
-    if (plan) {
-      firstResult = first;
-      emit('search-request', 'Модель запросила источники; проверка коротких запросов завершена', 'done');
-      const batches = [];
-      for (const query of plan.queries) {
+    // The API supplies only the typed task/condition, never a pupil's draft or
+    // OCR. Plain callers use only the last user message, NOT chat history.
+    const task = options.searchTaskText !== undefined ? options.searchTaskText
+      : options.fallbackMode === 'check' || messages.at(-1)?.role !== 'user' ? '' : messages.at(-1).content;
+    try { searchDecision = planLocalSearch(task); }
+    catch (error) { throw failed('search-local', 'Подготовка поискового запроса остановлена. Ни модель, ни поисковик не вызывались.', error); }
+    emit(searchDecision.search ? 'search-local' : 'internet-skipped', LOCAL_SEARCH_LABELS[searchDecision.reason], 'done');
+    if (searchDecision.search) {
+      const query = searchDecision.queries[0];
+      throwIfAborted(signal);
+      emit('search-1', 'Ищу источники…', 'active', {query});
+      try {
         throwIfAborted(signal);
-        emit(`search-${searches+1}`, 'Ищу источники…', 'active', { query });
-        let found;
-        try { found = await withAbort(search(query, { signal, tutorOnly }), signal); }
-        catch (error) { throw failed(`search-${searches+1}`, 'Поисковый этап не завершён. Ответ по памяти не подменяет поиск.', error); }
-        throwIfAborted(signal); searches++;
-        batches.push(found.results);
-        emit(`search-${searches}`, `Получены выдержки из источников: ${found.results.length}`, 'done', { query });
-      }
-      const collected = Array.from({length:5},(_,i)=>batches.map(rows=>rows[i]).filter(Boolean)).flat();
-      sourceData = validateSearchResults({provider:'Tavily',fetchedAt:new Date().toISOString(),query:plan.queries.join('; '),results:collected});
+        const found = await withAbort(search(query, {signal, tutorOnly}), signal);
+        sourceData = validateSearchResults(found);
+      } catch (error) { throw failed('search-1', 'Поисковый этап не завершён. Модель не вызывалась; ответ по памяти не подменяет поиск.', error); }
+      throwIfAborted(signal); searches++;
+      emit('search-1', `Получены выдержки из источников: ${sourceData.results.length}`, 'done', {query});
       systemPrompt += searchContext(sourceData);
-    } else {
-      result = first;
-      emit('internet-skipped', 'Модель ответила без запроса к поисковику. Отдельный проход планирования не запускался', 'done');
     }
   }
-  if (!result) {
-    try {
-      result = await call('answer', tutorOnly ? 'Готовлю учебную подсказку…' : 'Готовлю ответ…', {
-        systemPrompt, allowLocalFallback: sourceData ? false : options.allowLocalFallback,
-      });
-    } catch (error) {
-      throwIfAborted(signal);
-      if (!sourceData) throw error;
-      // Do not discard real sources after an AI refusal, or replace the chosen
-      // model with memory/another model. Stop never produces this result.
-      sourcesOnly = true;
-      result = {...firstResult, text:searchExcerpts(sourceData), used:'Tavily · только выдержки (ИИ-ответ не получен)'};
-      emit('sources-only', 'Поиск завершён, но ответ ИИ не получен. Показаны только найденные выдержки, без повтора', 'warning');
-    }
+  try {
+    result = await call('answer', tutorOnly ? 'Готовлю учебную подсказку…' : 'Готовлю ответ…', {
+      systemPrompt, allowLocalFallback: wantsSearch ? false : options.allowLocalFallback,
+    });
+  } catch (error) {
+    throwIfAborted(signal);
+    if (!sourceData) throw error;
+    // Do not discard real sources after an AI refusal, or replace the chosen
+    // model with memory/another model. Stop never produces this result.
+    sourcesOnly = true;
+    // No prior successful model generation exists. Do not claim Vision/OCR
+    // processing, reuse stale OCR or attribute these excerpts to that model.
+    cachedOcr = '';
+    result = {text:searchExcerpts(sourceData), used:'Tavily · только выдержки (ИИ-ответ не получен)',
+      photoInputUsed:'none', photoCount:0, extractedPhotoText:''};
+    emit('sources-only', 'Поиск завершён, но ответ ИИ не получен. Показаны только найденные выдержки, без повтора', 'warning');
   }
   const local = sourcesOnly || /^(Локальн|Автономн)/.test(result.used || '');
   const passes = local || options.siteHelp ? 0 : level === 'high' ? 2 : level === 'medium' ? 1 : 0;
@@ -169,9 +163,10 @@ export async function runAnswerWorkflow({ options, messages, systemPrompt, reque
     if(finalMath.some(x=>!x.correct)) result.text += '\n\n> Вычислитель нашёл расхождение в числовом равенстве. Ответ нельзя считать проверенным; перепроверьте вычисления.';
   }
   if (sourceData) result.text = constrainSearchCitations(result.text, sourceData) + searchFooter(sourceData);
-  else if (wantsSearch) result.text += NO_SEARCH_NOTE;
+  else if (wantsSearch) result.text += localSearchDisclosure(searchDecision.reason);
   const native = reasoningInfo(options.provider, options.model, level);
   if (level !== 'off') result.used += local ? ' · проверка ИИ не применялась' : ` · ${native.label} · проверочных проходов: ${verified}`;
   emit('complete', sourcesOnly ? 'Готовы только поисковые выдержки; ответ ИИ не получен' : 'Ответ готов', 'done');
-  return {...result, ...(sourcesOnly ? {sourcesOnly:true} : {}), workflow:{level, calls, searches, verified, elapsedMs:Date.now()-started, trail}, extractedPhotoText:result.photoInputUsed === 'vision' ? '' : cachedOcr || result.extractedPhotoText};
+  throwIfAborted(signal);
+  return {...result, ...(sourcesOnly ? {sourcesOnly:true} : {}), workflow:{level, calls, searches, verified, elapsedMs:Date.now()-started, trail}, extractedPhotoText:sourcesOnly || result.photoInputUsed === 'vision' ? '' : cachedOcr || result.extractedPhotoText};
 }

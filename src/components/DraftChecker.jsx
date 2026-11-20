@@ -113,6 +113,8 @@ export default function DraftChecker({
   const [aiStatus, setAiStatus] = useState(null);
   const [expressPreview, setExpressPreview] = useState(null);
   const [result, setResult] = useState(null);
+  // The fixed heading also recognises source-only results reopened from older history.
+  const sourcesOnly = Boolean(result?.sourcesOnly || result?.markdown?.startsWith('## Найденные источники\n\nМодель не завершила'));
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
 
@@ -316,7 +318,7 @@ export default function DraftChecker({
 
     setResult({
       id: res.id,
-      markdown: res.markdown,
+      markdown: res.markdown, sourcesOnly: res.sourcesOnly,
       providerUsed: res.providerUsed, workflow:res.workflow,
       photoInputUsed: res.photoInputUsed,
       mistakesAdded: res.mistakesAdded || 0,
@@ -691,7 +693,7 @@ export default function DraftChecker({
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-extrabold text-emerald-900 dark:text-emerald-200 flex items-center gap-1.5">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                Разбор учителя сохранён в чатах ({profile.grade} класс)
+                {sourcesOnly ? 'Сохранены только найденные выдержки — работа не проверена' : `Разбор учителя сохранён в чатах (${profile.grade} класс)`}
               </span>
               {getPhotoInputLabel(result.photoInputUsed) && <span className="text-[11px] rounded-full bg-sky-50 dark:bg-sky-950/50 text-sky-800 dark:text-sky-300 px-2.5 py-1">{getPhotoInputLabel(result.photoInputUsed)}</span>}
               {result.providerUsed && (
@@ -706,14 +708,14 @@ export default function DraftChecker({
                 type="button"
                 onClick={() =>
                   exportMarkdownToDocx({
-                    title: conditionText ? `Проверка работы: ${conditionText.slice(0, 56)}` : 'Разбор и чистовик работы',
-                    subtitle: `${profile.grade} класс · Проверка черновика · Домашка.ПРО`,
+                    title: sourcesOnly ? 'Найденные источники — не проверка работы' : conditionText ? `Проверка работы: ${conditionText.slice(0, 56)}` : 'Разбор и чистовик работы',
+                    subtitle: `${profile.grade} класс · ${sourcesOnly ? 'Выдержки поиска' : 'Проверка черновика'} · Домашка.ПРО`,
                     markdown: result.markdown,
                     filename: `Chistovik_${profile.grade}kl.docx`,
                   })
                 }
                 className="px-2.5 py-1.5 rounded-xl bg-blue-50 dark:bg-blue-950/60 border border-blue-300 dark:border-blue-700 text-xs font-bold text-blue-700 dark:text-blue-300 inline-flex items-center gap-1"
-                title="Скачать разбор и исправленный чистовик в формате Word (.docx)"
+                title={sourcesOnly ? "Скачать найденные выдержки и ссылки (.docx)" : "Скачать разбор и исправленный чистовик в формате Word (.docx)"}
               >
                 <FileText className="w-3.5 h-3.5" />
                 Word (.docx)
@@ -722,14 +724,14 @@ export default function DraftChecker({
                 type="button"
                 onClick={() =>
                   exportNotebookSheetPng({
-                    title: `Разбор работы · ${profile.grade} класс`,
+                    title: `${sourcesOnly ? 'Найденные источники' : 'Разбор работы'} · ${profile.grade} класс`,
                     markdown: result.markdown,
                     paperMode: checkType === 'math_step' ? 'grid' : 'lined',
                     filename: `Chistovik_${profile.grade}kl.png`,
                   })
                 }
                 className="px-2.5 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-700 text-xs font-bold text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1"
-                title="Сохранить чистовик как картинку тетрадного листа (.png)"
+                title={sourcesOnly ? "Сохранить найденные выдержки (.png)" : "Сохранить чистовик как картинку тетрадного листа (.png)"}
               >
                 <ImageIcon className="w-3.5 h-3.5" />
                 Лист (.png)
@@ -738,7 +740,7 @@ export default function DraftChecker({
                 type="button"
                 onClick={() => setTeleprompterOpen(true)}
                 className="px-2.5 py-1.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-300 dark:border-indigo-700 text-xs font-bold text-indigo-700 dark:text-indigo-300 inline-flex items-center gap-1"
-                title="Учить исправленный чистовик или сочинение в режиме суфлёра"
+                title={sourcesOnly ? "Просмотреть выдержки в суфлёре — это не проверенная работа" : "Учить исправленный чистовик или сочинение в режиме суфлёра"}
               >
                 <Mic2 className="w-3.5 h-3.5" />
                 Суфлёр
@@ -749,7 +751,7 @@ export default function DraftChecker({
                 className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 border border-emerald-300 dark:border-slate-700 text-xs font-semibold text-emerald-900 dark:text-emerald-200 inline-flex items-center gap-1"
               >
                 {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                {copied ? 'Скопировано' : 'Скопировать чистовик'}
+                {copied ? 'Скопировано' : sourcesOnly ? 'Скопировать выдержки' : 'Скопировать чистовик'}
               </button>
               <button
                 type="button"
@@ -876,7 +878,7 @@ export default function DraftChecker({
         open={teleprompterOpen}
         onClose={() => setTeleprompterOpen(false)}
         markdown={result?.markdown || draftText}
-        title="Суфлёр по проверенному чистовику / сочинению"
+        title={sourcesOnly ? "Выдержки поиска — не проверенная работа" : "Суфлёр по проверенному чистовику / сочинению"}
       />
     </div>
   );

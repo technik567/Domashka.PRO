@@ -225,6 +225,7 @@ export const chatStore = {
     sympy_badge = '',
     provider_used = '',
     workflow,
+    countActivity = true, // Source excerpts are not solved/checked work.
     messages = [],
   }) {
     ensureWorkspaceActive();
@@ -265,7 +266,7 @@ export const chatStore = {
       messages,
     };
 
-    if (cloud()) { await cloud().putChat(record); recordStudentActivity(item_type); return record; }
+    if (cloud()) { await cloud().putChat(record); if (countActivity) recordStudentActivity(item_type); return record; }
     const db = await openChatDB();
     if (db) {
       ensureWorkspaceActive();
@@ -280,7 +281,7 @@ export const chatStore = {
     fb.unshift(record);
     writeFallbackList(fb);
 
-    recordStudentActivity(item_type);
+    if (countActivity) recordStudentActivity(item_type);
     notifyHistoryListeners();
     return record;
   },

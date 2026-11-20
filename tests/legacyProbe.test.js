@@ -9,7 +9,7 @@ function handler(url,init={}){
   if(init.method==='POST')return json({event_id:'fixture'});
   return gradio(url.includes('qwen3-5')?[null,null,null,null,[{role:'assistant',content:'4'}]]:['4']);
 }
-describe('synthetic Pollinations answer-or-search probe never calls actual search/Auth',()=>{
+describe('synthetic Pollinations local-skip/answer probe never calls actual search/Auth',()=>{
   it('runs one initial answer and one review with no raw text in its report',async()=>{
     const original=globalThis.fetch,transport=vi.fn(async(url,init)=>{
       const content='2 + 2 = 4';
@@ -17,16 +17,16 @@ describe('synthetic Pollinations answer-or-search probe never calls actual searc
     });
     const report=await probePollinationsWorkflow(transport);expect(report.status).toBe('verified');expect(report.workflow).toMatchObject({calls:2,searches:0,verified:1});
     expect(transport).toHaveBeenCalledTimes(2);expect(transport.mock.calls.every(([url])=>url==='https://text.pollinations.ai/openai')).toBe(true);
-    expect(report.requests.map(row=>row.stage)).toEqual(['answer-or-search','review-1']);expect(report.searchAttempts).toBe(0);expect(globalThis.fetch).toBe(original);
+    expect(report.requests.map(row=>row.stage)).toEqual(['answer','review-1']);expect(report.searchAttempts).toBe(0);expect(globalThis.fetch).toBe(original);
     expect(JSON.stringify(report)).not.toContain('2 + 2 = 4');
   });
-  it('fails closed if the model wrongly chooses search: no actual search and no answer pass',async()=>{
+  it('rejects a model search command: no actual search, repair generation or review',async()=>{
     const transport=vi.fn(async()=>stream('data: {"choices":[{"delta":{"content":"{\\"search\\":true,\\"queries\\":[\\"учебный пример\\"]}"},"finish_reason":"stop"}]}\n\n'));
-    const report=await probePollinationsWorkflow(transport);expect(report).toMatchObject({status:'not-verified',searchAttempts:1,errorCode:'unexpected-search',stage:'search-1'});expect(transport).toHaveBeenCalledTimes(1);
+    const report=await probePollinationsWorkflow(transport);expect(report).toMatchObject({status:'not-verified',searchAttempts:0,errorCode:'search-action-unexpected',stage:'answer'});expect(transport).toHaveBeenCalledTimes(1);
   });
   it('stops after a real refusal and restores the global transport',async()=>{
     const original=globalThis.fetch,transport=vi.fn(async()=>new Response('PRIVATE',{status:402}));
-    const report=await probePollinationsWorkflow(transport);expect(report).toMatchObject({status:'not-verified',httpStatus:402,stage:'answer-or-search'});expect(transport).toHaveBeenCalledTimes(1);expect(globalThis.fetch).toBe(original);expect(JSON.stringify(report)).not.toContain('PRIVATE');
+    const report=await probePollinationsWorkflow(transport);expect(report).toMatchObject({status:'not-verified',httpStatus:402,stage:'answer'});expect(transport).toHaveBeenCalledTimes(1);expect(globalThis.fetch).toBe(original);expect(JSON.stringify(report)).not.toContain('PRIVATE');
   });
 });
 

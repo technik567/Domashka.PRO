@@ -50,7 +50,7 @@ describe('adaptive, disclosed reasoning transports', () => {
   it('renders levels and automatic search permission in the local UI', () => {
     expect(buildProgressSteps({stage:'search'},true).filter((step)=>step.active).map((step)=>step.id)).toEqual(['search']);
     const change=vi.fn(); render(<AiRequestControls settings={{provider:'builtin',builtinModel:'auto'}} value={{reasoning:'medium'}} onChange={change} />);
-    expect(screen.getByRole('button',{name:'Интернет: авто'}).disabled).toBe(false); expect(screen.getByText(/модель отвечает сразу или запрашивает источники, без обязательного отдельного плана/)).toBeTruthy();
+    expect(screen.getByRole('button',{name:'Интернет: авто'}).disabled).toBe(false); expect(screen.getByText(/локальные правила выделяют тему и при необходимости ищут до вызова модели/)).toBeTruthy();
     expect(screen.queryByRole('textbox')).toBeNull();
     fireEvent.change(screen.getByRole('combobox',{name:'Глубина рассуждения'}),{target:{value:'high'}}); expect(change.mock.calls[0][0].reasoning).toBe('high');
   });

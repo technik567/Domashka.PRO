@@ -17,12 +17,12 @@ on:
         type: boolean
         default: false
       pollinations_workflow:
-        description: 'Explicit synthetic answer-or-search/review: at most 2 Pollinations streaming calls, no live search/Auth/photos/retries'
+        description: 'Explicit synthetic local-skip/answer/review: at most 2 Pollinations streaming calls, no live search/Auth/photos/retries'
         required: false
         type: boolean
         default: false
       search_workflow:
-        description: 'Explicit synthetic search regression: up to 2 Pollinations calls + 1 real keyless Tavily search, no Auth/photos/keys/retries'
+        description: 'Explicit synthetic search regression: 1 real keyless Tavily search BEFORE at most 1 Pollinations call, no Auth/photos/keys/retries'
         required: false
         type: boolean
         default: false

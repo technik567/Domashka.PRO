@@ -81,7 +81,9 @@ export default function HomeworkSolver({
   const [aiStatus, setAiStatus] = useState(null);
   const [error, setError] = useState('');
 
-  const [result, setResult] = useState(null); // { id, markdown, sympyBadge, providerUsed, messages }
+  const [result, setResult] = useState(null);
+  // The fixed heading also recognises source-only results reopened from older history.
+  const sourcesOnly = Boolean(result?.sourcesOnly || result?.markdown?.startsWith('## Найденные источники\n\nМодель не завершила')); // { id, markdown, sympyBadge, providerUsed, messages }
   const [paperView, setPaperView] = useState(tutorOnly || basic ? 'modern' : 'notebook'); // 'modern' | 'notebook' | 'lined'
   const [copied, setCopied] = useState(false);
   const [speaking, setSpeaking] = useState(false);
@@ -277,7 +279,7 @@ export default function HomeworkSolver({
 
     setResult({
       id: res.id,
-      markdown: res.markdown,
+      markdown: res.markdown, sourcesOnly: res.sourcesOnly,
       sympyBadge: res.sympyBadge,
       providerUsed: res.providerUsed,
       photoInputUsed: res.photoInputUsed, workflow:res.workflow,
@@ -731,13 +733,13 @@ export default function HomeworkSolver({
                 onClick={() => {
                   const subjObj = SUBJECTS.find((s) => s.id === subject);
                   exportMarkdownToDocx({
-                    title: taskText ? `Домашняя работа: ${taskText.slice(0, 64)}` : 'Домашняя работа',
+                    title: sourcesOnly ? 'Найденные источники — не решение' : taskText ? `Домашняя работа: ${taskText.slice(0, 64)}` : 'Домашняя работа',
                     subtitle: `${profile.grade} класс · ${subjObj?.name || 'Школьный предмет'} · Домашка.ПРО`,
                     markdown: result.markdown,
                     filename: `Domashka_${profile.grade}kl_${subject || 'rabota'}.docx`,
                   });
                 }}
-                title="Скачать готовый документ Microsoft Word (.docx) для сдачи учителю или доклада"
+                title={sourcesOnly ? "Скачать найденные выдержки и ссылки (.docx)" : "Скачать готовый документ Microsoft Word (.docx) для сдачи учителю или доклада"}
                 className="px-2.5 py-1.5 rounded-xl border border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 text-xs font-bold text-blue-700 dark:text-blue-300 inline-flex items-center gap-1"
               >
                 <FileText className="w-3.5 h-3.5" />
@@ -749,13 +751,13 @@ export default function HomeworkSolver({
                 onClick={() => {
                   const subjObj = SUBJECTS.find((s) => s.id === subject);
                   exportNotebookSheetPng({
-                    title: `Домашняя работа · ${profile.grade} класс (${subjObj?.name || 'Предмет'})`,
+                    title: `${sourcesOnly ? 'Найденные источники' : 'Домашняя работа'} · ${profile.grade} класс (${subjObj?.name || 'Предмет'})`,
                     markdown: result.markdown,
                     paperMode: paperView === 'lined' ? 'lined' : 'grid',
                     filename: `Tetrad_${profile.grade}kl_${paperView === 'lined' ? 'lineyka' : 'kletka'}.png`,
                   });
                 }}
-                title="Сохранить решение как картинку тетрадного листа (.png) с ровными клеточками или линейками"
+                title={sourcesOnly ? "Сохранить найденные выдержки (.png)" : "Сохранить решение как картинку тетрадного листа (.png) с ровными клеточками или линейками"}
                 className="px-2.5 py-1.5 rounded-xl border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/60 hover:bg-emerald-100 text-xs font-bold text-emerald-700 dark:text-emerald-300 inline-flex items-center gap-1"
               >
                 <ImageIcon className="w-3.5 h-3.5" />
